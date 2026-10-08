@@ -1,33 +1,17 @@
 "use client";
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AiOutlineGlobal } from "react-icons/ai";
-import { MdLanguage } from "react-icons/md";
 import Search from "~/components/Search";
 import { HiSearch } from "react-icons/hi";
 import { FaBars, FaUser } from "react-icons/fa";
 import { useRouter } from "next/router";
 import CartHeader from "~/components/common/CartHeader";
-import { useCountry } from "~/context/CountryContext";
 import Logo from "./Logo";
 
 const Header = () => {
  const router = useRouter();
- const { country, selectCountry } = useCountry();
- const handleCountryChange = (selectedCountry: "SG" | "MY") => {
-  if (selectedCountry === country) {
-   setIsOpenMenu(false);
-   return;
-  }
 
-  localStorage.removeItem("watches_cart");
-
-  window.dispatchEvent(new Event("cartUpdated"));
-
-  selectCountry(selectedCountry);
-
-  setIsOpenMenu(false);
- };
  // Handle logic
  const handleMenuChange = (menuItem: any) => {
   switch (menuItem.type) {
@@ -93,16 +77,6 @@ const Header = () => {
      </li>
      <li className="mt-2">
       <span className="hover:text-[#127749]">Store locator</span>
-
-      <div className="mt-3 ml-4 flex flex-col gap-2 text-base font-normal">
-       <button onClick={() => handleCountryChange("SG")} className={`text-left ${country === "SG" ? "font-bold text-[#127749]" : "hover:text-[#127749]"}`}>
-        Singapore
-       </button>
-
-       <button onClick={() => handleCountryChange("MY")} className={`text-left ${country === "MY" ? "font-bold text-[#127749]" : "hover:text-[#127749]"}`}>
-        Malaysia
-       </button>
-      </div>
      </li>
 
      <Link href="/" className="flex justify-center py-4">

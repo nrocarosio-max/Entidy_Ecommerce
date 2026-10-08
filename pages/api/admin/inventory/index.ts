@@ -1,121 +1,294 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+
+import mongoose from "mongoose";
+
 import { connectDB } from "~/lib/mongodb";
-import { requirePermission } from "~/lib/permissions";
 import { Inventory } from "~/models/Inventory";
 import { Product } from "~/models/Product";
+import { requirePermission } from "~/lib/permissions";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+type ApiResponse = {
+ success: boolean;
+ message?: string;
+ inventory?: unknown;
+ inventories?: unknown[];
+ pagination?: {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+ };
+};
+
+function escapeRegex(value: string) {
+ return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse<ApiResponse>) {
  try {
-  const user = await requirePermission(req, req.method === "GET" ? "inventory.read" : "inventory.update");
-
   await connectDB();
 
+  /*
+   * GET INVENTORY
+   */
   if (req.method === "GET") {
-   const { storeId, productId, type, page = "1", limit = "20" } = req.query;
+   const user = await requirePermission(req, "inventory.read");
 
-   const pageNumber = Math.max(Number(page) || 1, 1);
+   const { productId, type, search, page = "1", limit = "20" } = req.query;
 
-   const limitNumber = Math.min(Math.max(Number(limit) || 20, 1), 100);
+   const currentPage = Math.max(Number(page) || 1, 1);
 
-   const filter: Record<string, any> = {};
+   const currentLimit = Math.min(Math.max(Number(limit) || 20, 1), 100);
 
+   const query: Record<string, unknown> = {};
+
+   /*
+    * Store access.
+    *
+    * SUPER_ADMIN can optionally filter by storeId.
+    * Other users can only access their own store.
+    */
    if (user.role === "SUPER_ADMIN") {
-    if (typeof storeId === "string" && storeId) {
-     filter.storeId = storeId;
+    if (typeof req.query.storeId === "string" && mongoose.Types.ObjectId.isValid(req.query.storeId)) {
+     query.storeId = new mongoose.Types.ObjectId(req.query.storeId);
     }
    } else {
     if (!user.storeId) {
      return res.status(403).json({
-      message: "Store access denied.",
+      success: false,
+      message: "You are not assigned to a store.",
      });
     }
 
-    filter.storeId = user.storeId;
+    query.storeId = new mongoose.Types.ObjectId(user.storeId);
    }
 
-   if (typeof productId === "string" && productId) {
-    filter.productId = productId;
+   /*
+    * Product filter.
+    */
+   if (typeof productId === "string" && mongoose.Types.ObjectId.isValid(productId)) {
+    query.productId = new mongoose.Types.ObjectId(productId);
    }
 
+   /*
+    * Movement type filter.
+    */
    if (typeof type === "string" && ["IN", "OUT", "ADJUSTMENT"].includes(type)) {
-    filter.type = type;
+    query.type = type;
    }
 
-   const skip = (pageNumber - 1) * limitNumber;
+   /*
+    * Search by product name or SKU.
+    */
+   if (typeof search === "string" && search.trim()) {
+    const productQuery: Record<string, unknown> = {
+     $or: [
+      {
+       name: {
+        $regex: escapeRegex(search.trim()),
+        $options: "i",
+       },
+      },
+      {
+       sku: {
+        $regex: escapeRegex(search.trim()),
+        $options: "i",
+       },
+      },
+     ],
+    };
 
-   const [records, total] = await Promise.all([
-    Inventory.find(filter)
-     .populate("productId", "name sku quantity currency")
-     .populate("createdBy", "name email")
+    if (user.role !== "SUPER_ADMIN") {
+     productQuery.storeId = new mongoose.Types.ObjectId(user.storeId as string);
+    } else if (typeof req.query.storeId === "string" && mongoose.Types.ObjectId.isValid(req.query.storeId)) {
+     productQuery.storeId = new mongoose.Types.ObjectId(req.query.storeId);
+    }
+
+    const products = await Product.find(productQuery).select("_id").lean();
+
+    query.productId = {
+     $in: products.map((product) => product._id),
+    };
+   }
+
+   const skip = (currentPage - 1) * currentLimit;
+
+   const [inventories, total] = await Promise.all([
+    Inventory.find(query)
+     .populate({
+      path: "productId",
+      select: "name sku images price currency quantity status",
+     })
+     .populate({
+      path: "createdBy",
+      select: "name email",
+     })
+     .populate({
+      path: "storeId",
+      select: "name slug",
+     })
      .sort({ createdAt: -1 })
      .skip(skip)
-     .limit(limitNumber)
+     .limit(currentLimit)
      .lean(),
 
-    Inventory.countDocuments(filter),
+    Inventory.countDocuments(query),
    ]);
 
    return res.status(200).json({
-    inventory: records,
+    success: true,
+    inventories,
     pagination: {
-     page: pageNumber,
-     limit: limitNumber,
+     page: currentPage,
+     limit: currentLimit,
      total,
-     totalPages: Math.ceil(total / limitNumber),
+     totalPages: Math.ceil(total / currentLimit),
     },
    });
   }
 
+  /*
+   * CREATE INVENTORY MOVEMENT
+   */
   if (req.method === "POST") {
-   const { storeId, productId, quantity, note, reference } = req.body;
+   const user = await requirePermission(req, "inventory.update");
 
-   const targetStoreId = user.role === "SUPER_ADMIN" ? storeId : user.storeId;
+   const { productId, type, quantity, note = "", reference = "" } = req.body;
 
-   if (!targetStoreId) {
-    return res.status(400).json({
-     message: "storeId is required.",
-    });
-   }
-
+   /*
+    * Validate product.
+    */
    if (!productId) {
     return res.status(400).json({
-     message: "productId is required.",
+     success: false,
+     message: "Product ID is required.",
     });
    }
 
-   const adjustment = Number(quantity);
-
-   if (!Number.isInteger(adjustment) || adjustment === 0) {
+   if (!mongoose.Types.ObjectId.isValid(productId)) {
     return res.status(400).json({
-     message: "quantity must be a non-zero integer.",
+     success: false,
+     message: "Invalid product ID.",
     });
    }
 
-   const product = await Product.findOne({
+   /*
+    * Validate movement type.
+    */
+   if (!["IN", "OUT", "ADJUSTMENT"].includes(type)) {
+    return res.status(400).json({
+     success: false,
+     message: "Invalid inventory type.",
+    });
+   }
+
+   /*
+    * Validate quantity.
+    */
+   const numericQuantity = Number(quantity);
+
+   if (!Number.isFinite(numericQuantity)) {
+    return res.status(400).json({
+     success: false,
+     message: "Quantity must be a valid number.",
+    });
+   }
+
+   if (type !== "ADJUSTMENT" && numericQuantity <= 0) {
+    return res.status(400).json({
+     success: false,
+     message: "Quantity must be greater than 0.",
+    });
+   }
+
+   if (type === "ADJUSTMENT" && numericQuantity < 0) {
+    return res.status(400).json({
+     success: false,
+     message: "Adjustment quantity cannot be negative.",
+    });
+   }
+
+   /*
+    * Find product.
+    *
+    * SUPER_ADMIN can access products from any store.
+    * Other users can only access products from their store.
+    */
+   const productQuery: Record<string, unknown> = {
     _id: productId,
-    storeId: targetStoreId,
-    isActive: true,
-   });
+   };
+
+   if (user.role !== "SUPER_ADMIN") {
+    if (!user.storeId) {
+     return res.status(403).json({
+      success: false,
+      message: "You are not assigned to a store.",
+     });
+    }
+
+    productQuery.storeId = user.storeId;
+   }
+
+   const product = await Product.findOne(productQuery);
 
    if (!product) {
     return res.status(404).json({
-     message: "Product not found.",
+     success: false,
+     message: "Product not found or you do not have access to it.",
     });
    }
 
-   const quantityBefore = product.quantity;
+   /*
+    * Store ID is always taken from the product.
+    *
+    * The client does not control storeId.
+    */
+   const storeId = product.storeId.toString();
 
-   const quantityAfter = quantityBefore + adjustment;
+   const quantityBefore = product.quantity || 0;
 
-   if (quantityAfter < 0) {
-    return res.status(400).json({
-     message: "Inventory quantity cannot be negative.",
-    });
+   let quantityAfter = quantityBefore;
+
+   /*
+    * STOCK IN
+    */
+   if (type === "IN") {
+    quantityAfter = quantityBefore + numericQuantity;
    }
 
+   /*
+    * STOCK OUT
+    */
+   if (type === "OUT") {
+    quantityAfter = quantityBefore - numericQuantity;
+
+    if (quantityAfter < 0) {
+     return res.status(400).json({
+      success: false,
+      message: "Insufficient stock.",
+     });
+    }
+   }
+
+   /*
+    * ADJUSTMENT
+    *
+    * The submitted quantity becomes
+    * the new actual stock quantity.
+    */
+   if (type === "ADJUSTMENT") {
+    quantityAfter = numericQuantity;
+   }
+
+   /*
+    * Update Product quantity.
+    */
    product.quantity = quantityAfter;
 
-   if (quantityAfter === 0) {
+   /*
+    * Automatically update product status.
+    */
+   if (quantityAfter <= 0) {
     product.status = "OUT_OF_STOCK";
    } else if (product.status === "OUT_OF_STOCK") {
     product.status = "ACTIVE";
@@ -123,43 +296,74 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
    await product.save();
 
+   /*
+    * Create inventory history.
+    */
    const inventory = await Inventory.create({
-    storeId: targetStoreId,
-    productId: product._id,
-    type: adjustment > 0 ? "IN" : "ADJUSTMENT",
-    quantity: adjustment,
+    storeId,
+    productId,
+    type,
+    quantity: numericQuantity,
     quantityBefore,
     quantityAfter,
-    note: note || "",
-    reference: reference || "",
+    note: typeof note === "string" ? note.trim() : "",
+    reference: typeof reference === "string" ? reference.trim() : "",
     createdBy: user.id,
    });
 
+   /*
+    * Return populated inventory record.
+    */
+   const populatedInventory = await Inventory.findById(inventory._id)
+    .populate({
+     path: "productId",
+     select: "name sku images price currency quantity status",
+    })
+    .populate({
+     path: "createdBy",
+     select: "name email",
+    })
+    .populate({
+     path: "storeId",
+     select: "name slug",
+    })
+    .lean();
+
    return res.status(201).json({
+    success: true,
     message: "Inventory updated successfully.",
-    inventory,
+    inventory: populatedInventory,
    });
   }
 
+  /*
+   * METHOD NOT ALLOWED
+   */
   return res.status(405).json({
+   success: false,
    message: "Method not allowed.",
   });
- } catch (error: any) {
-  if (error?.message === "UNAUTHORIZED") {
+ } catch (error) {
+  console.error("Inventory API error:", error);
+
+  const message = error instanceof Error ? error.message : "Something went wrong.";
+
+  if (message === "UNAUTHORIZED") {
    return res.status(401).json({
+    success: false,
     message: "Unauthorized.",
    });
   }
 
-  if (error?.message === "FORBIDDEN") {
+  if (message === "FORBIDDEN") {
    return res.status(403).json({
+    success: false,
     message: "Forbidden.",
    });
   }
 
-  console.error("Inventory API error:", error);
-
   return res.status(500).json({
+   success: false,
    message: "Internal server error.",
   });
  }

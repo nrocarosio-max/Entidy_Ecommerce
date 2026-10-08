@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { FaArrowLeft, FaSave } from "react-icons/fa";
+import { FaArrowLeft, FaSave, FaCloudUploadAlt, FaTrash } from "react-icons/fa";
 
 interface Category {
  _id: string;
@@ -27,6 +27,7 @@ interface Product {
  costPrice: number | null;
  currency: string;
  images: string[];
+ videos: string[];
  quantity: number;
  lowStockThreshold: number;
  status: string;
@@ -47,6 +48,10 @@ export default function EditProductPage() {
 
  const [loading, setLoading] = useState(true);
  const [saving, setSaving] = useState(false);
+
+ const [uploadingImages, setUploadingImages] = useState(false);
+ const [uploadingVideos, setUploadingVideos] = useState(false);
+
  const [error, setError] = useState("");
 
  const [form, setForm] = useState({
@@ -60,7 +65,8 @@ export default function EditProductPage() {
   compareAtPrice: "",
   costPrice: "",
   currency: "VND",
-  images: "",
+  images: [] as string[],
+  videos: [] as string[],
   quantity: "",
   lowStockThreshold: "5",
   status: "DRAFT",
@@ -96,17 +102,31 @@ export default function EditProductPage() {
     slug: currentProduct.slug || "",
     sku: currentProduct.sku || "",
     description: currentProduct.description || "",
+
     categoryId: currentProduct.categoryId?._id || currentProduct.categoryId || "",
+
     brandId: currentProduct.brandId?._id || currentProduct.brandId || "",
+
     price: String(currentProduct.price ?? ""),
+
     compareAtPrice: currentProduct.compareAtPrice !== null && currentProduct.compareAtPrice !== undefined ? String(currentProduct.compareAtPrice) : "",
+
     costPrice: currentProduct.costPrice !== null && currentProduct.costPrice !== undefined ? String(currentProduct.costPrice) : "",
+
     currency: currentProduct.currency || "VND",
-    images: Array.isArray(currentProduct.images) ? currentProduct.images.join("\n") : "",
+
+    images: Array.isArray(currentProduct.images) ? currentProduct.images : [],
+
+    videos: Array.isArray(currentProduct.videos) ? currentProduct.videos : [],
+
     quantity: String(currentProduct.quantity ?? 0),
+
     lowStockThreshold: String(currentProduct.lowStockThreshold ?? 5),
+
     status: currentProduct.status || "DRAFT",
+
     isFeatured: currentProduct.isFeatured ?? false,
+
     isActive: currentProduct.isActive ?? true,
    });
 
@@ -143,10 +163,89 @@ export default function EditProductPage() {
   }
  }
 
- function updateField(field: string, value: string | boolean) {
+ function updateField(field: string, value: string | boolean | string[]) {
   setForm((current) => ({
    ...current,
    [field]: value,
+  }));
+ }
+
+ async function uploadFiles(files: FileList | null, type: "image" | "video") {
+  if (!files || files.length === 0) {
+   return;
+  }
+
+  try {
+   if (type === "image") {
+    setUploadingImages(true);
+   } else {
+    setUploadingVideos(true);
+   }
+
+   setError("");
+
+   const uploadedUrls: string[] = [];
+
+   for (const file of Array.from(files)) {
+    const formData = new FormData();
+
+    formData.append("file", file);
+
+    const response = await fetch("/api/admin/upload", {
+     method: "POST",
+     body: formData,
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || !data?.url) {
+     throw new Error(data?.message || `Failed to upload ${type}.`);
+    }
+
+    if (type === "image" && data.resourceType !== "image") {
+     throw new Error("The uploaded file is not a valid image.");
+    }
+
+    if (type === "video" && data.resourceType !== "video") {
+     throw new Error("The uploaded file is not a valid video.");
+    }
+
+    uploadedUrls.push(data.url);
+   }
+
+   if (type === "image") {
+    setForm((current) => ({
+     ...current,
+     images: [...current.images, ...uploadedUrls],
+    }));
+   } else {
+    setForm((current) => ({
+     ...current,
+     videos: [...current.videos, ...uploadedUrls],
+    }));
+   }
+  } catch (error) {
+   setError(error instanceof Error ? error.message : `Failed to upload ${type}.`);
+  } finally {
+   if (type === "image") {
+    setUploadingImages(false);
+   } else {
+    setUploadingVideos(false);
+   }
+  }
+ }
+
+ function removeImage(index: number) {
+  setForm((current) => ({
+   ...current,
+   images: current.images.filter((_, imageIndex) => imageIndex !== index),
+  }));
+ }
+
+ function removeVideo(index: number) {
+  setForm((current) => ({
+   ...current,
+   videos: current.videos.filter((_, videoIndex) => videoIndex !== index),
   }));
  }
 
@@ -159,11 +258,6 @@ export default function EditProductPage() {
    setSaving(true);
    setError("");
 
-   const images = form.images
-    .split("\n")
-    .map((item) => item.trim())
-    .filter(Boolean);
-
    const response = await fetch(`/api/admin/products/${product._id}`, {
     method: "PATCH",
     headers: {
@@ -171,21 +265,39 @@ export default function EditProductPage() {
     },
     body: JSON.stringify({
      storeId: product.storeId,
+
      name: form.name.trim(),
+
      slug: form.slug.trim(),
+
      sku: form.sku.trim(),
+
      description: form.description.trim(),
+
      categoryId: form.categoryId || null,
+
      brandId: form.brandId || null,
+
      price: Number(form.price),
+
      compareAtPrice: form.compareAtPrice === "" ? null : Number(form.compareAtPrice),
+
      costPrice: form.costPrice === "" ? null : Number(form.costPrice),
+
      currency: form.currency.trim().toUpperCase(),
-     images,
+
+     images: form.images,
+
+     videos: form.videos,
+
      quantity: Number(form.quantity),
+
      lowStockThreshold: Number(form.lowStockThreshold),
+
      status: form.status,
+
      isFeatured: form.isFeatured,
+
      isActive: form.isActive,
     }),
    });
@@ -231,6 +343,10 @@ export default function EditProductPage() {
    {error && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{error}</div>}
 
    <form onSubmit={handleSubmit} className="space-y-6">
+    {/* =====================================================
+            BASIC INFORMATION
+        ====================================================== */}
+
     <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
      <h2 className="mb-5 text-lg font-semibold text-gray-900">Basic Information</h2>
 
@@ -315,6 +431,10 @@ export default function EditProductPage() {
      </div>
     </div>
 
+    {/* =====================================================
+            PRICING
+        ====================================================== */}
+
     <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
      <h2 className="mb-5 text-lg font-semibold text-gray-900">Pricing</h2>
 
@@ -369,6 +489,10 @@ export default function EditProductPage() {
      </div>
     </div>
 
+    {/* =====================================================
+            INVENTORY
+        ====================================================== */}
+
     <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
      <h2 className="mb-5 text-lg font-semibold text-gray-900">Inventory</h2>
 
@@ -399,21 +523,113 @@ export default function EditProductPage() {
      </div>
     </div>
 
+    {/* =====================================================
+            IMAGES
+        ====================================================== */}
+
     <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-     <h2 className="mb-5 text-lg font-semibold text-gray-900">Images</h2>
+     <div className="mb-5 flex items-center justify-between gap-4">
+      <div>
+       <h2 className="text-lg font-semibold text-gray-900">Images</h2>
 
-     <label className="mb-2 block text-sm font-medium text-gray-700">Image URLs</label>
+       <p className="mt-1 text-xs text-gray-400">Upload product images to Cloudinary.</p>
+      </div>
 
-     <textarea
-      value={form.images}
-      onChange={(event) => updateField("images", event.target.value)}
-      rows={5}
-      placeholder="https://example.com/image-1.jpg&#10;https://example.com/image-2.jpg"
-      className="w-full resize-none rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-gray-400"
-     />
+      <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-gray-800">
+       <FaCloudUploadAlt size={14} />
 
-     <p className="mt-2 text-xs text-gray-400">Enter one image URL per line.</p>
+       {uploadingImages ? "Uploading..." : "Upload Images"}
+
+       <input
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        disabled={uploadingImages}
+        onChange={(event) => {
+         uploadFiles(event.target.files, "image");
+
+         event.target.value = "";
+        }}
+       />
+      </label>
+     </div>
+
+     {form.images.length > 0 ? (
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+       {form.images.map((image, index) => (
+        <div key={`${image}-${index}`} className="group relative overflow-hidden rounded-xl border border-gray-200 bg-gray-50">
+         <img src={image} alt={`Product image ${index + 1}`} className="h-44 w-full object-cover" />
+
+         <button
+          type="button"
+          onClick={() => removeImage(index)}
+          className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-lg bg-black/70 text-white opacity-0 transition group-hover:opacity-100 hover:bg-red-600">
+          <FaTrash size={12} />
+         </button>
+        </div>
+       ))}
+      </div>
+     ) : (
+      <div className="rounded-xl border border-dashed border-gray-300 px-6 py-10 text-center text-sm text-gray-400">No product images.</div>
+     )}
     </div>
+
+    {/* =====================================================
+            VIDEOS
+        ====================================================== */}
+
+    <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+     <div className="mb-5 flex items-center justify-between gap-4">
+      <div>
+       <h2 className="text-lg font-semibold text-gray-900">Videos</h2>
+
+       <p className="mt-1 text-xs text-gray-400">Upload product videos to Cloudinary.</p>
+      </div>
+
+      <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-gray-800">
+       <FaCloudUploadAlt size={14} />
+
+       {uploadingVideos ? "Uploading..." : "Upload Videos"}
+
+       <input
+        type="file"
+        accept="video/*"
+        multiple
+        className="hidden"
+        disabled={uploadingVideos}
+        onChange={(event) => {
+         uploadFiles(event.target.files, "video");
+
+         event.target.value = "";
+        }}
+       />
+      </label>
+     </div>
+
+     {form.videos.length > 0 ? (
+      <div className="grid gap-4 md:grid-cols-2">
+       {form.videos.map((video, index) => (
+        <div key={`${video}-${index}`} className="group relative overflow-hidden rounded-xl border border-gray-200 bg-black">
+         <video src={video} controls className="h-64 w-full object-contain" />
+
+         <button
+          type="button"
+          onClick={() => removeVideo(index)}
+          className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-lg bg-black/70 text-white opacity-0 transition group-hover:opacity-100 hover:bg-red-600">
+          <FaTrash size={12} />
+         </button>
+        </div>
+       ))}
+      </div>
+     ) : (
+      <div className="rounded-xl border border-dashed border-gray-300 px-6 py-10 text-center text-sm text-gray-400">No product videos.</div>
+     )}
+    </div>
+
+    {/* =====================================================
+            STATUS
+        ====================================================== */}
 
     <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
      <h2 className="mb-5 text-lg font-semibold text-gray-900">Status</h2>
@@ -460,6 +676,10 @@ export default function EditProductPage() {
      </div>
     </div>
 
+    {/* =====================================================
+            ACTIONS
+        ====================================================== */}
+
     <div className="flex justify-end gap-3">
      <Link
       href="/admin/products"
@@ -469,7 +689,7 @@ export default function EditProductPage() {
 
      <button
       type="submit"
-      disabled={saving}
+      disabled={saving || uploadingImages || uploadingVideos}
       className="inline-flex items-center gap-2 rounded-xl bg-gray-900 px-6 py-3 text-sm font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50">
       <FaSave size={13} />
 

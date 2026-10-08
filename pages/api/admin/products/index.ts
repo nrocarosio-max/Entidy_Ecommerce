@@ -1,23 +1,180 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 
-import { connectDB } from "~/lib/mongodb";
-import { Product } from "~/models/Product";
-import { Brand } from "~/models/Brand";
-import { Category } from "~/models/Category";
-import { Store } from "~/models/Store";
-import { requirePermission } from "~/lib/permissions";
+import mongoose from "mongoose";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+import { connectDB } from "~/lib/mongodb";
+import { requirePermission, getAuthorizedStoreId } from "~/lib/permissions";
+
+import { Product } from "~/models/Product";
+import { Category } from "~/models/Category";
+import { Brand } from "~/models/Brand";
+
+type ApiResponse = {
+ success: boolean;
+ message?: string;
+ products?: any[];
+ product?: any;
+ pagination?: {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+ };
+};
+
+function escapeRegex(value: string) {
+ return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse<ApiResponse>) {
  try {
+  await connectDB();
+
   /*
+   * ============================================================
    * GET PRODUCTS
+   * ============================================================
    */
   if (req.method === "GET") {
    const user = await requirePermission(req, "products.read");
 
-   await connectDB();
+   let storeId: string | null = null;
 
-   const storeId = user.role === "SUPER_ADMIN" ? req.query.storeId : user.storeId;
+   /*
+    * SUPER_ADMIN can select a store.
+    */
+   if (user.role === "SUPER_ADMIN") {
+    const queryStoreId = typeof req.query.storeId === "string" ? req.query.storeId : "";
+
+    if (!queryStoreId) {
+     return res.status(400).json({
+      success: false,
+      message: "storeId is required.",
+     });
+    }
+
+    storeId = queryStoreId;
+   } else {
+    /*
+     * Other users can only access their own store.
+     */
+    storeId = await getAuthorizedStoreId(req);
+   }
+
+   if (!storeId || !mongoose.Types.ObjectId.isValid(storeId)) {
+    return res.status(400).json({
+     success: false,
+     message: "Invalid storeId.",
+    });
+   }
+
+   const page = Math.max(1, Number(req.query.page) || 1);
+
+   const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
+
+   const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+
+   const status = typeof req.query.status === "string" ? req.query.status.trim() : "";
+
+   const categoryId = typeof req.query.categoryId === "string" ? req.query.categoryId.trim() : "";
+
+   const brandId = typeof req.query.brandId === "string" ? req.query.brandId.trim() : "";
+
+   /*
+    * By default, only active products
+    * are returned.
+    *
+    * ?includeInactive=true
+    * can be used by admin pages that
+    * need inactive products as well.
+    */
+   const includeInactive = req.query.includeInactive === "true";
+
+   const filter: Record<string, any> = {
+    storeId,
+   };
+
+   if (!includeInactive) {
+    filter.isActive = true;
+   }
+
+   if (status) {
+    filter.status = status;
+   }
+
+   if (categoryId && mongoose.Types.ObjectId.isValid(categoryId)) {
+    filter.categoryId = categoryId;
+   }
+
+   if (brandId && mongoose.Types.ObjectId.isValid(brandId)) {
+    filter.brandId = brandId;
+   }
+
+   /*
+    * Search by:
+    * - name
+    * - SKU
+    * - slug
+    */
+   if (search) {
+    const regex = new RegExp(escapeRegex(search), "i");
+
+    filter.$or = [
+     {
+      name: regex,
+     },
+     {
+      sku: regex,
+     },
+     {
+      slug: regex,
+     },
+    ];
+   }
+
+   const skip = (page - 1) * limit;
+
+   const [products, total] = await Promise.all([
+    Product.find(filter)
+     .populate("categoryId", "name slug description")
+     .populate("brandId", "name slug logo")
+     .sort({
+      createdAt: -1,
+     })
+     .skip(skip)
+     .limit(limit)
+     .lean(),
+
+    Product.countDocuments(filter),
+   ]);
+
+   return res.status(200).json({
+    success: true,
+    products,
+    pagination: {
+     page,
+     limit,
+     total,
+     totalPages: Math.ceil(total / limit),
+    },
+   });
+  }
+
+  /*
+   * ============================================================
+   * CREATE PRODUCT
+   * ============================================================
+   */
+  if (req.method === "POST") {
+   const user = await requirePermission(req, "products.create");
+
+   let storeId: string | null = null;
+
+   if (user.role === "SUPER_ADMIN") {
+    storeId = typeof req.body?.storeId === "string" ? req.body.storeId : null;
+   } else {
+    storeId = await getAuthorizedStoreId(req);
+   }
 
    if (!storeId) {
     return res.status(400).json({
@@ -26,29 +183,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
    }
 
-   const products = await Product.find({
-    storeId,
-   })
-    .populate("brandId", "name slug logo")
-    .populate("categoryId", "name slug parentId")
-    .sort({
-     createdAt: -1,
-    })
-    .lean();
-
-   return res.status(200).json({
-    success: true,
-    products,
-   });
-  }
-
-  /*
-   * CREATE PRODUCT
-   */
-  if (req.method === "POST") {
-   const user = await requirePermission(req, "products.create");
-
-   await connectDB();
+   if (!mongoose.Types.ObjectId.isValid(storeId)) {
+    return res.status(400).json({
+     success: false,
+     message: "Invalid storeId.",
+    });
+   }
 
    const {
     name,
@@ -62,6 +202,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     costPrice,
     currency,
     images,
+    videos,
     quantity,
     lowStockThreshold,
     status,
@@ -70,223 +211,154 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    } = req.body;
 
    /*
-    * Required fields.
+    * Basic validation.
     */
-   if (!name || !slug || !sku || price === undefined || !currency) {
+   if (!name || !String(name).trim()) {
     return res.status(400).json({
      success: false,
-     message: "Name, slug, SKU, price and currency are required.",
+     message: "Product name is required.",
     });
    }
 
-   /*
-    * Determine target store.
-    */
-   const targetStoreId = user.role === "SUPER_ADMIN" ? req.body.storeId : user.storeId;
-
-   if (!targetStoreId) {
+   if (!slug || !String(slug).trim()) {
     return res.status(400).json({
      success: false,
-     message: "storeId is required.",
+     message: "Product slug is required.",
     });
    }
 
-   /*
-    * Make sure store exists
-    * and is active.
-    */
-   const store = await Store.findOne({
-    _id: targetStoreId,
-    isActive: true,
-   }).lean();
-
-   if (!store) {
+   if (!sku || !String(sku).trim()) {
     return res.status(400).json({
      success: false,
-     message: "Store not found or inactive.",
+     message: "Product SKU is required.",
     });
    }
 
-   const normalizedName = String(name).trim();
-
-   const normalizedSlug = String(slug).trim().toLowerCase();
-
-   const normalizedSku = String(sku).trim().toUpperCase();
-
-   const normalizedCurrency = String(currency).trim().toUpperCase();
-
-   if (!normalizedName || !normalizedSlug || !normalizedSku || !normalizedCurrency) {
+   if (price === undefined || price === null || Number(price) < 0) {
     return res.status(400).json({
      success: false,
-     message: "Name, slug, SKU and currency cannot be empty.",
+     message: "Valid product price is required.",
     });
    }
 
-   /*
-    * Validate price.
-    */
-   const parsedPrice = Number(price);
-
-   if (Number.isNaN(parsedPrice) || parsedPrice < 0) {
+   if (!currency || !String(currency).trim()) {
     return res.status(400).json({
      success: false,
-     message: "Price must be a valid number greater than or equal to 0.",
+     message: "Currency is required.",
     });
-   }
-
-   /*
-    * Validate compareAtPrice.
-    */
-   let parsedCompareAtPrice = compareAtPrice === null || compareAtPrice === undefined || compareAtPrice === "" ? null : Number(compareAtPrice);
-
-   if (parsedCompareAtPrice !== null && (Number.isNaN(parsedCompareAtPrice) || parsedCompareAtPrice < 0)) {
-    return res.status(400).json({
-     success: false,
-     message: "compareAtPrice must be a valid number.",
-    });
-   }
-
-   /*
-    * Validate costPrice.
-    */
-   let parsedCostPrice = costPrice === null || costPrice === undefined || costPrice === "" ? null : Number(costPrice);
-
-   if (parsedCostPrice !== null && (Number.isNaN(parsedCostPrice) || parsedCostPrice < 0)) {
-    return res.status(400).json({
-     success: false,
-     message: "costPrice must be a valid number.",
-    });
-   }
-
-   /*
-    * Check duplicate SKU / slug.
-    */
-   const existingProduct = await Product.findOne({
-    storeId: targetStoreId,
-    $or: [
-     {
-      sku: normalizedSku,
-     },
-     {
-      slug: normalizedSlug,
-     },
-    ],
-   }).lean();
-
-   if (existingProduct) {
-    return res.status(409).json({
-     success: false,
-     message: "A product with this SKU or slug already exists in this store.",
-    });
-   }
-
-   /*
-    * Validate brand.
-    */
-   if (brandId) {
-    const brand = await Brand.findById(brandId).lean();
-
-    if (!brand) {
-     return res.status(400).json({
-      success: false,
-      message: "Brand not found.",
-     });
-    }
-
-    if (brand.isActive !== true) {
-     return res.status(400).json({
-      success: false,
-      message: "Brand is inactive.",
-     });
-    }
-
-    if (brand.storeId?.toString() !== targetStoreId.toString()) {
-     console.log("BRAND STORE DEBUG:", {
-      brandId: brand._id.toString(),
-      brandStoreId: brand.storeId?.toString(),
-      targetStoreId: targetStoreId.toString(),
-     });
-
-     return res.status(400).json({
-      success: false,
-      message: "Brand belongs to another store.",
-      debug: {
-       brandStoreId: brand.storeId?.toString(),
-       targetStoreId: targetStoreId.toString(),
-      },
-     });
-    }
    }
 
    /*
     * Validate category.
     */
    if (categoryId) {
+    if (!mongoose.Types.ObjectId.isValid(categoryId)) {
+     return res.status(400).json({
+      success: false,
+      message: "Invalid categoryId.",
+     });
+    }
+
     const category = await Category.findOne({
      _id: categoryId,
-     storeId: targetStoreId,
+     storeId,
      isActive: true,
     }).lean();
 
     if (!category) {
      return res.status(400).json({
       success: false,
-      message: "Category not found or does not belong to this store.",
+      message: "Category does not belong to this store.",
      });
     }
    }
 
    /*
-    * Validate images.
+    * Validate brand.
     */
-   const normalizedImages = Array.isArray(images) ? images.map((image) => String(image).trim()).filter(Boolean) : [];
+   if (brandId) {
+    if (!mongoose.Types.ObjectId.isValid(brandId)) {
+     return res.status(400).json({
+      success: false,
+      message: "Invalid brandId.",
+     });
+    }
+
+    const brand = await Brand.findOne({
+     _id: brandId,
+     storeId,
+     isActive: true,
+    }).lean();
+
+    if (!brand) {
+     return res.status(400).json({
+      success: false,
+      message: "Brand does not belong to this store.",
+     });
+    }
+   }
 
    /*
-    * Validate quantity.
+    * Check duplicate SKU.
     */
-   const parsedQuantity = quantity === undefined ? 0 : Number(quantity);
+   const existingSku = await Product.findOne({
+    storeId,
+    sku: String(sku).trim().toUpperCase(),
+   }).lean();
 
-   if (Number.isNaN(parsedQuantity) || parsedQuantity < 0) {
-    return res.status(400).json({
+   if (existingSku) {
+    return res.status(409).json({
      success: false,
-     message: "Quantity must be a valid number greater than or equal to 0.",
+     message: "A product with this SKU already exists in this store.",
     });
    }
 
    /*
-    * Validate low stock threshold.
+    * Check duplicate slug.
     */
-   const parsedLowStockThreshold = lowStockThreshold === undefined ? 5 : Number(lowStockThreshold);
+   const existingSlug = await Product.findOne({
+    storeId,
+    slug: String(slug).trim(),
+   }).lean();
 
-   if (Number.isNaN(parsedLowStockThreshold) || parsedLowStockThreshold < 0) {
-    return res.status(400).json({
+   if (existingSlug) {
+    return res.status(409).json({
      success: false,
-     message: "lowStockThreshold must be a valid number greater than or equal to 0.",
+     message: "A product with this slug already exists in this store.",
     });
    }
 
    /*
-    * Validate status.
+    * Normalize images.
     */
-   const allowedStatuses = ["DRAFT", "ACTIVE", "INACTIVE", "OUT_OF_STOCK"];
+   const normalizedImages = Array.isArray(images)
+    ? images
+       .filter((image) => typeof image === "string")
+       .map((image) => image.trim())
+       .filter(Boolean)
+    : [];
 
-   const normalizedStatus = status === undefined ? "DRAFT" : String(status).trim().toUpperCase();
+   /*
+    * Normalize videos.
+    */
+   const normalizedVideos = Array.isArray(videos)
+    ? videos
+       .filter((video) => typeof video === "string")
+       .map((video) => video.trim())
+       .filter(Boolean)
+    : [];
 
-   if (!allowedStatuses.includes(normalizedStatus)) {
-    return res.status(400).json({
-     success: false,
-     message: "Invalid product status.",
-    });
-   }
-
+   /*
+    * Create product.
+    */
    const product = await Product.create({
-    storeId: targetStoreId,
+    storeId,
 
-    name: normalizedName,
+    name: String(name).trim(),
 
-    slug: normalizedSlug,
+    slug: String(slug).trim(),
 
-    sku: normalizedSku,
+    sku: String(sku).trim().toUpperCase(),
 
     description: description ? String(description).trim() : "",
 
@@ -294,23 +366,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     brandId: brandId || null,
 
-    price: parsedPrice,
+    price: Number(price),
 
-    compareAtPrice: parsedCompareAtPrice,
+    compareAtPrice: compareAtPrice === null || compareAtPrice === undefined || compareAtPrice === "" ? null : Number(compareAtPrice),
 
-    costPrice: parsedCostPrice,
+    costPrice: costPrice === null || costPrice === undefined || costPrice === "" ? null : Number(costPrice),
 
-    currency: normalizedCurrency,
+    currency: String(currency).trim().toUpperCase(),
 
     images: normalizedImages,
 
-    quantity: parsedQuantity,
+    videos: normalizedVideos,
 
-    lowStockThreshold: parsedLowStockThreshold,
+    quantity: quantity === undefined || quantity === null || quantity === "" ? 0 : Number(quantity),
 
-    status: normalizedStatus,
+    lowStockThreshold: lowStockThreshold === undefined || lowStockThreshold === null || lowStockThreshold === "" ? 5 : Number(lowStockThreshold),
 
-    isFeatured: isFeatured === undefined ? false : Boolean(isFeatured),
+    status: status || "DRAFT",
+
+    isFeatured: Boolean(isFeatured),
 
     isActive: isActive === undefined ? true : Boolean(isActive),
    });
@@ -318,43 +392,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    /*
     * Return populated product.
     */
-   const populatedProduct = await Product.findById(product._id).populate("brandId", "name slug logo").populate("categoryId", "name slug parentId").lean();
+   const populatedProduct = await Product.findById(product._id).populate("categoryId", "name slug description").populate("brandId", "name slug logo").lean();
 
    return res.status(201).json({
     success: true,
-    message: "Product created successfully.",
     product: populatedProduct,
    });
   }
 
-  res.setHeader("Allow", ["GET", "POST"]);
-
+  /*
+   * ============================================================
+   * METHOD NOT ALLOWED
+   * ============================================================
+   */
   return res.status(405).json({
    success: false,
-   message: `Method ${req.method} not allowed.`,
+   message: "Method not allowed.",
   });
- } catch (error) {
-  console.error("PRODUCT API ERROR:", error);
+ } catch (error: any) {
+  console.error("Products API error:", error);
 
-  if (error instanceof Error) {
-   if (error.message === "UNAUTHORIZED") {
-    return res.status(401).json({
-     success: false,
-     message: "Authentication required.",
-    });
-   }
+  if (error?.message === "UNAUTHORIZED") {
+   return res.status(401).json({
+    success: false,
+    message: "Unauthorized.",
+   });
+  }
 
-   if (error.message === "FORBIDDEN") {
-    return res.status(403).json({
-     success: false,
-     message: "You do not have permission to manage products.",
-    });
-   }
+  if (error?.message === "FORBIDDEN") {
+   return res.status(403).json({
+    success: false,
+    message: "Forbidden.",
+   });
+  }
+
+  /*
+   * MongoDB duplicate key.
+   */
+  if (error?.code === 11000) {
+   const duplicatedField = Object.keys(error.keyPattern || {})[0];
+
+   return res.status(409).json({
+    success: false,
+    message: duplicatedField ? `A product with this ${duplicatedField} already exists.` : "Duplicate product data.",
+   });
   }
 
   return res.status(500).json({
    success: false,
-   message: "Internal server error.",
+   message: error?.message || "Internal server error.",
   });
  }
 }

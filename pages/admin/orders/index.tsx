@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { FaEye, FaSearch, FaShoppingBag } from "react-icons/fa";
+import { FaEye, FaSearch, FaShoppingBag, FaPlus } from "react-icons/fa";
 
 interface Store {
  _id: string;
@@ -530,32 +530,44 @@ export default function OrdersPage() {
      </div>
     </div>
 
-    {isSuperAdmin && (
-     <div className="w-full xl:w-72">
-      <label className="mb-1 block text-sm font-medium text-gray-700">Store</label>
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+     {/* Store selector */}
+     {isSuperAdmin && (
+      <div className="w-full sm:w-72">
+       <label className="mb-1 block text-sm font-medium text-gray-700">Store</label>
 
-      <select
-       value={selectedStore}
-       onChange={(event) => {
-        setSelectedStore(event.target.value);
+       <select
+        value={selectedStore}
+        onChange={(event) => {
+         setSelectedStore(event.target.value);
 
-        setPagination((current) => ({
-         ...current,
-         page: 1,
-        }));
-       }}
-       disabled={loadingStores}
-       className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-gray-900">
-       <option value="">{loadingStores ? "Loading stores..." : "Select store"}</option>
+         setPagination((current) => ({
+          ...current,
+          page: 1,
+         }));
+        }}
+        disabled={loadingStores}
+        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-gray-900">
+        <option value="">{loadingStores ? "Loading stores..." : "Select store"}</option>
 
-       {stores.map((store) => (
-        <option key={store._id} value={store._id}>
-         {store.name}
-        </option>
-       ))}
-      </select>
-     </div>
-    )}
+        {stores.map((store) => (
+         <option key={store._id} value={store._id}>
+          {store.name}
+         </option>
+        ))}
+       </select>
+      </div>
+     )}
+
+     {/* Add order */}
+     <Link
+      href="/admin/orders/create"
+      className="inline-flex h-[42px] items-center justify-center gap-2 rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white transition hover:bg-gray-800">
+      <FaPlus className="text-xs" />
+
+      <span>Thêm đơn hàng</span>
+     </Link>
+    </div>
    </div>
 
    {/* Error */}

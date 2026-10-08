@@ -7,7 +7,6 @@ import { useRouter } from "next/router";
 import { store } from "~/Redux/store";
 import { MyAppProps } from "~/layout/types";
 import { Layouts } from "~/layout/Layouts";
-import { CountryProvider } from "~/context/CountryContext";
 function App({ Component, pageProps }: MyAppProps) {
  const router = useRouter();
 
@@ -23,11 +22,9 @@ function App({ Component, pageProps }: MyAppProps) {
       <Component {...pageProps} />
      </Layout>
     ) : (
-     <CountryProvider>
-      <Layout>
-       <Component {...pageProps} />
-      </Layout>
-     </CountryProvider>
+     <Layout>
+      <Component {...pageProps} />
+     </Layout>
     )}
    </Provider>
   </SessionProvider>

@@ -2,53 +2,67 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import mongoose from "mongoose";
 
 import { connectDB } from "~/lib/mongodb";
-import { requirePermission } from "~/lib/permissions";
+import { requirePermission, getAuthorizedStoreId } from "~/lib/permissions";
+import { normalizeText } from "~/lib/normalizeText";
 
 import { Order } from "~/models/Order";
 import { OrderItem } from "~/models/OrderItem";
 import { OrderStatus } from "~/models/OrderStatus";
-import { OrderStatusHistory } from "~/models/OrderStatusHistory";
 import { Product } from "~/models/Product";
 import { Customer } from "~/models/Customer";
-import { Inventory } from "~/models/Inventory";
 import { Store } from "~/models/Store";
 
-import { normalizeText } from "~/lib/normalizeText";
-
-function sendError(res: NextApiResponse, status: number, message: string) {
- return res.status(status).json({
-  success: false,
-  message,
- });
+interface ApiResponse {
+ success: boolean;
+ message?: string;
+ orders?: unknown[];
+ order?: unknown;
+ pagination?: {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+ };
+ summary?: {
+  totalOrders: number;
+  totalAmount: number;
+ };
+ statusSummary?: unknown[];
 }
 
-function getStoreId(
- req: NextApiRequest,
- user: {
-  role: string;
-  storeId: string | null;
- },
-) {
- const requestedStoreId = typeof req.query.storeId === "string" ? req.query.storeId : undefined;
-
- if (user.role === "SUPER_ADMIN") {
-  return requestedStoreId || null;
- }
-
- return user.storeId;
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
- await connectDB();
-
+export default async function handler(req: NextApiRequest, res: NextApiResponse<ApiResponse>) {
  try {
+  await connectDB();
+
+  /*
+   * ==================================================
+   * GET ORDERS
+   * ==================================================
+   */
+
   if (req.method === "GET") {
    const user = await requirePermission(req, "orders.read");
 
-   const storeId = getStoreId(req, user);
+   const requestedStoreId = typeof req.query.storeId === "string" ? req.query.storeId : "";
 
-   if (!storeId) {
-    return sendError(res, 400, "storeId is required.");
+   let storeId = requestedStoreId;
+
+   if (user.role !== "SUPER_ADMIN") {
+    if (!user.storeId) {
+     return res.status(403).json({
+      success: false,
+      message: "You are not assigned to a store.",
+     });
+    }
+
+    storeId = user.storeId;
+   }
+
+   if (!storeId || !mongoose.Types.ObjectId.isValid(storeId)) {
+    return res.status(400).json({
+     success: false,
+     message: "Valid storeId is required.",
+    });
    }
 
    const page = Math.max(Number(req.query.page) || 1, 1);
@@ -63,46 +77,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
    const customerId = typeof req.query.customerId === "string" ? req.query.customerId : "";
 
-   const fromDate = typeof req.query.fromDate === "string" ? req.query.fromDate : "";
+   const dateFrom = typeof req.query.dateFrom === "string" ? req.query.dateFrom : "";
 
-   const toDate = typeof req.query.toDate === "string" ? req.query.toDate : "";
+   const dateTo = typeof req.query.dateTo === "string" ? req.query.dateTo : "";
 
-   const filter: Record<string, any> = {
-    storeId,
+   const filter: Record<string, unknown> = {
+    storeId: new mongoose.Types.ObjectId(storeId),
    };
 
-   if (statusId) {
-    filter.statusId = statusId;
+   if (statusId && mongoose.Types.ObjectId.isValid(statusId)) {
+    filter.statusId = new mongoose.Types.ObjectId(statusId);
+   }
+
+   if (customerId && mongoose.Types.ObjectId.isValid(customerId)) {
+    filter.customerId = new mongoose.Types.ObjectId(customerId);
    }
 
    if (paymentStatus) {
     filter.paymentStatus = paymentStatus;
    }
 
-   if (customerId) {
-    filter.customerId = customerId;
-   }
+   if (dateFrom || dateTo) {
+    const createdAt: Record<string, Date> = {};
 
-   if (fromDate || toDate) {
-    filter.createdAt = {};
-
-    if (fromDate) {
-     filter.createdAt.$gte = new Date(`${fromDate}T00:00:00+07:00`);
+    if (dateFrom) {
+     createdAt.$gte = new Date(`${dateFrom}T00:00:00+07:00`);
     }
 
-    if (toDate) {
-     filter.createdAt.$lte = new Date(`${toDate}T23:59:59.999+07:00`);
+    if (dateTo) {
+     createdAt.$lte = new Date(`${dateTo}T23:59:59.999+07:00`);
     }
+
+    filter.createdAt = createdAt;
    }
 
    /*
-    * Search order number directly.
-    * Customer name/phone search is handled below.
+    * Search order number / customer name / phone.
     */
+
    if (search) {
     const normalizedSearch = normalizeText(search);
 
-    const customers = await Customer.find({
+    const matchingCustomers = await Customer.find({
      storeId,
      $or: [
       {
@@ -122,7 +138,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
      .select("_id")
      .lean();
 
-    const customerIds = customers.map((customer) => customer._id);
+    const customerIds = matchingCustomers.map((customer) => customer._id);
 
     filter.$or = [
      {
@@ -141,26 +157,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
    const skip = (page - 1) * limit;
 
-   const [orders, total, summary] = await Promise.all([
+   const [orders, total, summaryResult, activeStatuses] = await Promise.all([
     Order.find(filter)
-     .populate({
-      path: "customerId",
-      select: "name phone isActive",
-     })
-     .populate({
-      path: "createdBy",
-      select: "name email",
-     })
-     .populate({
-      path: "storeId",
-      select: "name slug",
-     })
+     .populate("customerId")
+     .populate("createdBy", "name email")
+     .populate("storeId", "name slug")
      .populate({
       path: "statusId",
-      select: "name code description color icon sortOrder isInitial isFinal nextStatusIds",
       populate: {
        path: "nextStatusIds",
-       select: "name code description color icon sortOrder isInitial isFinal",
+       select: "name code description color icon sortOrder isActive isInitial isFinal",
       },
      })
      .sort({ createdAt: -1 })
@@ -172,64 +178,67 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     Order.aggregate([
      {
-      $match: {
-       storeId: new mongoose.Types.ObjectId(storeId),
-      },
+      $match: filter,
      },
      {
       $group: {
        _id: null,
-       totalOrders: { $sum: 1 },
-       totalAmount: { $sum: "$total" },
+       totalOrders: {
+        $sum: 1,
+       },
+       totalAmount: {
+        $sum: "$total",
+       },
       },
      },
     ]),
+
+    OrderStatus.find({
+     storeId,
+     isActive: true,
+    })
+     .sort({
+      sortOrder: 1,
+     })
+     .lean(),
    ]);
+
+   /*
+    * Build status counts.
+    */
 
    const statusCounts = await Order.aggregate([
     {
-     $match: filter,
-    },
-    {
-     $lookup: {
-      from: "orderstatuses",
-      localField: "statusId",
-      foreignField: "_id",
-      as: "status",
-     },
-    },
-    {
-     $unwind: {
-      path: "$status",
-      preserveNullAndEmptyArrays: true,
+     $match: {
+      storeId: new mongoose.Types.ObjectId(storeId),
      },
     },
     {
      $group: {
-      _id: {
-       code: "$status.code",
-       name: "$status.name",
+      _id: "$statusId",
+      count: {
+       $sum: 1,
       },
-      count: { $sum: 1 },
-     },
-    },
-    {
-     $sort: {
-      "_id.name": 1,
      },
     },
    ]);
 
-   const summaryData = summary[0] || {
+   const statusCountMap = new Map(statusCounts.map((item) => [item._id?.toString(), item.count]));
+
+   const statusSummary = activeStatuses.map((status) => ({
+    id: status._id.toString(),
+    code: status.code,
+    name: status.name,
+    color: status.color,
+    icon: status.icon,
+    sortOrder: status.sortOrder,
+    count: statusCountMap.get(status._id.toString()) || 0,
+   }));
+
+   const summary = summaryResult[0] || {
     totalOrders: 0,
     totalAmount: 0,
    };
-
-   const statusSummary = statusCounts.map((item) => ({
-    code: item._id?.code || "",
-    name: item._id?.name || "",
-    count: item.count,
-   }));
 
    return res.status(200).json({
     success: true,
@@ -241,51 +250,51 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
      totalPages: Math.ceil(total / limit),
     },
     summary: {
-     totalOrders: summaryData.totalOrders,
-     totalAmount: summaryData.totalAmount,
+     totalOrders: summary.totalOrders || 0,
+     totalAmount: summary.totalAmount || 0,
     },
     statusSummary,
    });
   }
 
+  /*
+   * ==================================================
+   * POST CREATE ORDER
+   * ==================================================
+   */
+
   if (req.method === "POST") {
    const user = await requirePermission(req, "orders.create");
 
-   const {
-    storeId: bodyStoreId,
-    customerId,
-    customerSnapshot,
-    shippingAddress,
-    items,
-    subtotal,
-    shippingFee = 0,
-    discount = 0,
-    total,
-    currency,
-    paymentMethod = "COD",
-    paymentStatus = "PENDING",
-    note = "",
-    shippingMethod = "",
-    trackingNumber = "",
-   } = req.body;
+   const body = req.body || {};
 
-   const storeId = user.role === "SUPER_ADMIN" ? bodyStoreId : user.storeId;
+   const requestedStoreId = typeof body.storeId === "string" ? body.storeId : "";
 
-   if (!storeId) {
-    return sendError(res, 400, "storeId is required.");
+   let storeId = requestedStoreId;
+
+   if (user.role !== "SUPER_ADMIN") {
+    if (!user.storeId) {
+     return res.status(403).json({
+      success: false,
+      message: "You are not assigned to a store.",
+     });
+    }
+
+    storeId = user.storeId;
    }
 
-   if (!mongoose.Types.ObjectId.isValid(storeId)) {
-    return sendError(res, 400, "Invalid storeId.");
+   if (!storeId || !mongoose.Types.ObjectId.isValid(storeId)) {
+    return res.status(400).json({
+     success: false,
+     message: "Valid storeId is required.",
+    });
    }
 
-   if (!mongoose.Types.ObjectId.isValid(customerId)) {
-    return sendError(res, 400, "Invalid customerId.");
-   }
-
-   if (!Array.isArray(items) || items.length === 0) {
-    return sendError(res, 400, "Order must contain at least one item.");
-   }
+   /*
+    * --------------------------------------------------
+    * Validate store
+    * --------------------------------------------------
+    */
 
    const store = await Store.findOne({
     _id: storeId,
@@ -293,116 +302,351 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    }).lean();
 
    if (!store) {
-    return sendError(res, 404, "Store not found or inactive.");
+    return res.status(404).json({
+     success: false,
+     message: "Store not found or inactive.",
+    });
    }
 
-   const customer = await Customer.findOne({
-    _id: customerId,
-    storeId,
-    isActive: true,
-   }).lean();
+   /*
+    * --------------------------------------------------
+    * Validate customer input
+    * --------------------------------------------------
+    */
 
-   if (!customer) {
-    return sendError(res, 404, "Customer not found.");
+   const customerId = typeof body.customerId === "string" ? body.customerId : "";
+
+   const customerInput = body.customer && typeof body.customer === "object" ? body.customer : null;
+
+   if (!customerId && !customerInput) {
+    return res.status(400).json({
+     success: false,
+     message: "Either customerId or customer information is required.",
+    });
    }
+
+   /*
+    * --------------------------------------------------
+    * Validate items
+    * --------------------------------------------------
+    */
+
+   if (!Array.isArray(body.items) || body.items.length === 0) {
+    return res.status(400).json({
+     success: false,
+     message: "At least one order item is required.",
+    });
+   }
+
+   /*
+    * --------------------------------------------------
+    * Find initial status
+    * --------------------------------------------------
+    */
 
    const initialStatus = await OrderStatus.findOne({
     storeId,
     code: "WAITING_STOCK",
     isActive: true,
-   }).lean();
-
-   if (!initialStatus) {
-    return sendError(res, 500, "Initial order status WAITING_STOCK was not found.");
-   }
-
-   const productIds = items.map((item: any) => item.productId);
-
-   const validProductIds = productIds.every((id: string) => mongoose.Types.ObjectId.isValid(id));
-
-   if (!validProductIds) {
-    return sendError(res, 400, "Invalid productId.");
-   }
-
-   const products = await Product.find({
-    _id: {
-     $in: productIds,
-    },
-    storeId,
-    isActive: true,
    });
 
-   if (products.length !== productIds.length) {
-    return sendError(res, 400, "One or more products are invalid.");
+   if (!initialStatus) {
+    return res.status(500).json({
+     success: false,
+     message: "Initial order status WAITING_STOCK was not found.",
+    });
    }
 
-   const productMap = new Map(products.map((product) => [product._id.toString(), product]));
-
-   for (const item of items) {
-    const product = productMap.get(item.productId);
-
-    if (!product) {
-     return sendError(res, 400, `Product ${item.productId} not found.`);
-    }
-
-    const quantity = Number(item.quantity);
-
-    if (!Number.isInteger(quantity) || quantity <= 0) {
-     return sendError(res, 400, `Invalid quantity for product ${product.name}.`);
-    }
-
-    /*
-     * Guest/admin-created orders are initially
-     * WAITING_STOCK.
-     *
-     * Stock is NOT deducted here.
-     * Stock will be deducted when the order
-     * reaches the appropriate confirmation step.
-     */
-   }
+   /*
+    * --------------------------------------------------
+    * Start transaction
+    * --------------------------------------------------
+    */
 
    const session = await mongoose.startSession();
 
    try {
     session.startTransaction();
 
+    /*
+     * ==================================================
+     * CUSTOMER
+     * ==================================================
+     */
+
+    let customer;
+
+    if (customerId) {
+     /*
+      * Existing customer.
+      */
+
+     if (!mongoose.Types.ObjectId.isValid(customerId)) {
+      throw new Error("Invalid customerId.");
+     }
+
+     customer = await Customer.findOne({
+      _id: customerId,
+      storeId,
+      isActive: true,
+     }).session(session);
+
+     if (!customer) {
+      throw new Error("Customer not found or does not belong to this store.");
+     }
+    } else {
+     /*
+      * New customer.
+      */
+
+     const name = typeof customerInput.name === "string" ? customerInput.name.trim() : "";
+
+     const phone = typeof customerInput.phone === "string" ? customerInput.phone.trim() : "";
+
+     const email = typeof customerInput.email === "string" ? customerInput.email.trim() : "";
+
+     if (!name) {
+      throw new Error("Customer name is required.");
+     }
+
+     if (!phone) {
+      throw new Error("Customer phone is required.");
+     }
+
+     /*
+      * Search existing customer by
+      * store + phone.
+      */
+
+     customer = await Customer.findOne({
+      storeId,
+      phone,
+     }).session(session);
+
+     /*
+      * Existing phone:
+      * reuse customer.
+      */
+
+     if (customer) {
+      /*
+       * Update missing email/name if necessary.
+       * We do not overwrite existing customer
+       * information unnecessarily.
+       */
+
+      let changed = false;
+
+      if (!customer.name && name) {
+       customer.name = name;
+       customer.nameNormalized = normalizeText(name);
+       changed = true;
+      }
+
+      if (!customer.email && email) {
+       customer.email = email;
+       changed = true;
+      }
+
+      if (changed) {
+       await customer.save({
+        session,
+       });
+      }
+     } else {
+      /*
+       * Create brand-new customer.
+       */
+
+      const createdCustomers = await Customer.create(
+       [
+        {
+         storeId,
+         name,
+         nameNormalized: normalizeText(name),
+         phone,
+         email,
+         isActive: true,
+        },
+       ],
+       {
+        session,
+       },
+      );
+
+      customer = createdCustomers[0];
+     }
+    }
+
+    /*
+     * ==================================================
+     * PRODUCTS
+     * ==================================================
+     */
+
+    const productIds = body.items.map((item: any) => item.productId);
+
+    const uniqueProductIds = [...new Set(productIds)];
+
+    const products = await Product.find({
+     _id: {
+      $in: uniqueProductIds,
+     },
+     storeId,
+     isActive: true,
+    }).session(session);
+
+    const productMap = new Map(products.map((product) => [product._id.toString(), product]));
+
+    const orderItems: Array<{
+     productId: mongoose.Types.ObjectId;
+     productSnapshot: {
+      name: string;
+      sku: string;
+      slug: string;
+      image: string;
+     };
+     quantity: number;
+     price: number;
+     subtotal: number;
+     currency: string;
+    }> = [];
+
+    let calculatedSubtotal = 0;
+
+    for (const item of body.items) {
+     const productId = typeof item.productId === "string" ? item.productId : "";
+
+     if (!mongoose.Types.ObjectId.isValid(productId)) {
+      throw new Error("Invalid productId.");
+     }
+
+     const product = productMap.get(productId);
+
+     if (!product) {
+      throw new Error("One or more products were not found.");
+     }
+
+     const quantity = Number(item.quantity);
+
+     if (!Number.isInteger(quantity) || quantity < 1) {
+      throw new Error(`Invalid quantity for product ${product.name}.`);
+     }
+
+     /*
+      * We only validate stock here.
+      * Stock is NOT deducted until
+      * order reaches CONFIRMED.
+      */
+
+     if (product.quantity < quantity) {
+      throw new Error(`Insufficient stock for ${product.name}. Available: ${product.quantity}.`);
+     }
+
+     const price = Number(product.price);
+
+     const itemSubtotal = price * quantity;
+
+     calculatedSubtotal += itemSubtotal;
+
+     orderItems.push({
+      productId: product._id as mongoose.Types.ObjectId,
+
+      productSnapshot: {
+       name: product.name,
+       sku: product.sku,
+       slug: product.slug || "",
+       image: product.images?.[0] || "",
+      },
+
+      quantity,
+
+      price,
+
+      subtotal: itemSubtotal,
+
+      currency: product.currency,
+     });
+    }
+
+    /*
+     * ==================================================
+     * TOTALS
+     * ==================================================
+     */
+
+    const shippingFee = Math.max(0, Number(body.shippingFee || 0));
+
+    const discount = Math.max(0, Number(body.discount || 0));
+
+    const subtotal = calculatedSubtotal;
+
+    const total = Math.max(0, subtotal + shippingFee - discount);
+
+    const currency = body.currency || orderItems[0]?.currency || "VND";
+
+    /*
+     * ==================================================
+     * ORDER NUMBER
+     * ==================================================
+     */
+
     const orderNumber = `ORD-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    const [order] = await Order.create(
+    /*
+     * ==================================================
+     * CREATE ORDER
+     * ==================================================
+     */
+
+    const createdOrders = await Order.create(
      [
       {
        storeId,
-       customerId,
+
+       customerId: customer._id,
+
        orderNumber,
 
        statusId: initialStatus._id,
 
        customerSnapshot: {
-        name: customerSnapshot?.name || customer.name,
-        phone: customerSnapshot?.phone || customer.phone,
-        email: customerSnapshot?.email || "",
+        name: customer.name,
+        phone: customer.phone,
+        email: customer.email || "",
        },
 
        shippingAddress: {
-        province: shippingAddress?.province || "",
-        district: shippingAddress?.district || "",
-        ward: shippingAddress?.ward || "",
-        address: shippingAddress?.address || "",
-        postalCode: shippingAddress?.postalCode || "",
+        province: body.shippingAddress?.province || "",
+
+        district: body.shippingAddress?.district || "",
+
+        ward: body.shippingAddress?.ward || "",
+
+        address: body.shippingAddress?.address || "",
+
+        postalCode: body.shippingAddress?.postalCode || "",
        },
 
        subtotal,
+
        shippingFee,
+
        discount,
+
        total,
+
        currency,
 
-       paymentMethod,
-       paymentStatus,
+       paymentMethod: body.paymentMethod || "COD",
 
-       note,
-       shippingMethod,
-       trackingNumber,
+       paymentStatus: body.paymentStatus || "PENDING",
+
+       note: typeof body.note === "string" ? body.note.trim() : "",
+
+       shippingMethod: typeof body.shippingMethod === "string" ? body.shippingMethod.trim() : "",
+
+       trackingNumber: typeof body.trackingNumber === "string" ? body.trackingNumber.trim() : "",
 
        createdBy: user.id,
       },
@@ -412,75 +656,80 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
      },
     );
 
-    const orderItems = items.map((item: any) => {
-     const product = productMap.get(item.productId)!;
+    const order = createdOrders[0];
 
-     const quantity = Number(item.quantity);
+    /*
+     * ==================================================
+     * CREATE ORDER ITEMS
+     * ==================================================
+     */
 
-     const price = Number(item.price ?? product.price);
+    const orderItemDocuments = orderItems.map((item) => ({
+     orderId: order._id,
 
-     return {
-      orderId: order._id,
-      productId: product._id,
+     productId: item.productId,
 
-      productSnapshot: {
-       name: product.name,
-       sku: product.sku,
-       slug: product.slug,
-       image: product.images?.[0] || "",
-      },
+     productSnapshot: item.productSnapshot,
 
-      quantity,
-      price,
-      subtotal: price * quantity,
-      currency: item.currency || product.currency,
-     };
-    });
+     quantity: item.quantity,
 
-    await OrderItem.insertMany(orderItems, {
+     price: item.price,
+
+     subtotal: item.subtotal,
+
+     currency: item.currency,
+    }));
+
+    await OrderItem.insertMany(orderItemDocuments, {
      session,
     });
 
-    /*
-     * The initial WAITING_STOCK status does not
-     * reserve stock.
-     *
-     * Inventory will be created when the order
-     * is confirmed through the status transition.
-     */
-
     await session.commitTransaction();
 
-    const createdOrder = await Order.findById(order._id)
-     .populate({
-      path: "customerId",
-      select: "name phone isActive",
-     })
+    /*
+     * ==================================================
+     * LOAD CREATED ORDER
+     * ==================================================
+     */
+
+    const populatedOrder = await Order.findById(order._id)
+     .populate("customerId")
+     .populate("createdBy", "name email")
+     .populate("storeId", "name slug")
      .populate({
       path: "statusId",
-      select: "name code description color icon sortOrder isInitial isFinal nextStatusIds",
       populate: {
        path: "nextStatusIds",
-       select: "name code description color icon sortOrder isInitial isFinal",
+       select: "name code description color icon sortOrder isActive isInitial isFinal",
       },
-     })
-     .populate({
-      path: "createdBy",
-      select: "name email",
      })
      .lean();
 
     return res.status(201).json({
      success: true,
-     order: createdOrder,
+     order: populatedOrder,
     });
-   } catch (error) {
+   } catch (error: any) {
     await session.abortTransaction();
-    throw error;
+
+    console.error("Create order error:", error);
+
+    return res.status(400).json({
+     success: false,
+     message: error?.message || "Failed to create order.",
+    });
    } finally {
     await session.endSession();
    }
   }
+
+  /*
+   * ==================================================
+   * METHOD NOT ALLOWED
+   * ==================================================
+   */
+
+  res.setHeader("Allow", ["GET", "POST"]);
 
   return res.status(405).json({
    success: false,
@@ -490,13 +739,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   console.error("Orders API error:", error);
 
   if (error?.message === "UNAUTHORIZED") {
-   return sendError(res, 401, "Unauthorized.");
+   return res.status(401).json({
+    success: false,
+    message: "Unauthorized.",
+   });
   }
 
   if (error?.message === "FORBIDDEN") {
-   return sendError(res, 403, "Forbidden.");
+   return res.status(403).json({
+    success: false,
+    message: "Forbidden.",
+   });
   }
 
-  return sendError(res, 500, error?.message || "Internal server error.");
+  return res.status(500).json({
+   success: false,
+   message: error?.message || "Internal server error.",
+  });
  }
 }

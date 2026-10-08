@@ -71,7 +71,18 @@ const ProductSchema = new Schema(
    trim: true,
   },
 
+  /*
+   * Product images
+   */
   images: {
+   type: [String],
+   default: [],
+  },
+
+  /*
+   * Product videos
+   */
+  videos: {
    type: [String],
    default: [],
   },

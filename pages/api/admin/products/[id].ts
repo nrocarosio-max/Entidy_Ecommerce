@@ -1,5 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 
+import mongoose from "mongoose";
+
 import { connectDB } from "~/lib/mongodb";
 import { Product } from "~/models/Product";
 import { Brand } from "~/models/Brand";
@@ -7,24 +9,32 @@ import { Category } from "~/models/Category";
 import { Store } from "~/models/Store";
 import { requirePermission } from "~/lib/permissions";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+type ApiResponse = {
+ success: boolean;
+ message?: string;
+ product?: any;
+};
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse<ApiResponse>) {
  try {
   const { id } = req.query;
 
-  if (typeof id !== "string") {
+  if (typeof id !== "string" || !mongoose.Types.ObjectId.isValid(id)) {
    return res.status(400).json({
     success: false,
     message: "Invalid product ID.",
    });
   }
 
+  await connectDB();
+
   /*
+   * ============================================================
    * GET ONE PRODUCT
+   * ============================================================
    */
   if (req.method === "GET") {
    const user = await requirePermission(req, "products.read");
-
-   await connectDB();
 
    const product = await Product.findById(id).populate("brandId", "name slug logo").populate("categoryId", "name slug parentId").lean();
 
@@ -37,6 +47,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
    /*
     * SUPER_ADMIN can access any store.
+    *
     * Other users can only access their own store.
     */
    if (user.role !== "SUPER_ADMIN" && product.storeId.toString() !== user.storeId) {
@@ -53,12 +64,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   /*
+   * ============================================================
    * UPDATE PRODUCT
+   * ============================================================
    */
   if (req.method === "PATCH") {
    const user = await requirePermission(req, "products.update");
-
-   await connectDB();
 
    const product = await Product.findById(id);
 
@@ -101,12 +112,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     costPrice,
     currency,
     images,
+    videos,
     quantity,
     lowStockThreshold,
     status,
     isFeatured,
     isActive,
    } = req.body;
+
+   /*
+    * ==========================================================
+    * NORMALIZE BASIC FIELDS
+    * ==========================================================
+    */
 
    const normalizedName = name !== undefined ? String(name).trim() : product.name;
 
@@ -124,8 +142,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    }
 
    /*
-    * Validate price.
+    * ==========================================================
+    * VALIDATE PRICE
+    * ==========================================================
     */
+
    const parsedPrice = price === undefined ? product.price : Number(price);
 
    if (Number.isNaN(parsedPrice) || parsedPrice < 0) {
@@ -136,8 +157,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    }
 
    /*
-    * Validate compareAtPrice.
+    * ==========================================================
+    * VALIDATE COMPARE AT PRICE
+    * ==========================================================
     */
+
    const parsedCompareAtPrice =
     compareAtPrice === undefined ? product.compareAtPrice : compareAtPrice === null || compareAtPrice === "" ? null : Number(compareAtPrice);
 
@@ -149,8 +173,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    }
 
    /*
-    * Validate costPrice.
+    * ==========================================================
+    * VALIDATE COST PRICE
+    * ==========================================================
     */
+
    const parsedCostPrice = costPrice === undefined ? product.costPrice : costPrice === null || costPrice === "" ? null : Number(costPrice);
 
    if (parsedCostPrice !== null && (Number.isNaN(parsedCostPrice) || parsedCostPrice < 0)) {
@@ -161,8 +188,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    }
 
    /*
-    * Prevent duplicate SKU or slug.
+    * ==========================================================
+    * CHECK DUPLICATE SKU / SLUG
+    * ==========================================================
     */
+
    const duplicateProduct = await Product.findOne({
     storeId: product.storeId,
     _id: {
@@ -186,11 +216,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    }
 
    /*
-    * Validate brand.
+    * ==========================================================
+    * VALIDATE BRAND
+    * ==========================================================
     */
+
    const targetBrandId = brandId === undefined ? product.brandId : brandId || null;
 
    if (targetBrandId) {
+    if (!mongoose.Types.ObjectId.isValid(targetBrandId.toString())) {
+     return res.status(400).json({
+      success: false,
+      message: "Invalid brandId.",
+     });
+    }
+
     const brand = await Brand.findOne({
      _id: targetBrandId,
      storeId: product.storeId,
@@ -206,11 +246,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    }
 
    /*
-    * Validate category.
+    * ==========================================================
+    * VALIDATE CATEGORY
+    * ==========================================================
     */
+
    const targetCategoryId = categoryId === undefined ? product.categoryId : categoryId || null;
 
    if (targetCategoryId) {
+    if (!mongoose.Types.ObjectId.isValid(targetCategoryId.toString())) {
+     return res.status(400).json({
+      success: false,
+      message: "Invalid categoryId.",
+     });
+    }
+
     const category = await Category.findOne({
      _id: targetCategoryId,
      storeId: product.storeId,
@@ -226,8 +276,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    }
 
    /*
-    * Validate quantity.
+    * ==========================================================
+    * VALIDATE QUANTITY
+    * ==========================================================
     */
+
    const parsedQuantity = quantity === undefined ? product.quantity : Number(quantity);
 
    if (Number.isNaN(parsedQuantity) || parsedQuantity < 0) {
@@ -238,8 +291,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    }
 
    /*
-    * Validate low stock threshold.
+    * ==========================================================
+    * VALIDATE LOW STOCK THRESHOLD
+    * ==========================================================
     */
+
    const parsedLowStockThreshold = lowStockThreshold === undefined ? product.lowStockThreshold : Number(lowStockThreshold);
 
    if (Number.isNaN(parsedLowStockThreshold) || parsedLowStockThreshold < 0) {
@@ -250,8 +306,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    }
 
    /*
-    * Validate status.
+    * ==========================================================
+    * VALIDATE STATUS
+    * ==========================================================
     */
+
    const allowedStatuses = ["DRAFT", "ACTIVE", "INACTIVE", "OUT_OF_STOCK"];
 
    const normalizedStatus = status === undefined ? product.status : String(status).trim().toUpperCase();
@@ -264,8 +323,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    }
 
    /*
-    * Validate store.
+    * ==========================================================
+    * VALIDATE STORE
+    * ==========================================================
     */
+
    const store = await Store.findOne({
     _id: product.storeId,
     isActive: true,
@@ -279,29 +341,81 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    }
 
    /*
-    * Normalize images.
+    * ==========================================================
+    * NORMALIZE IMAGES
+    * ==========================================================
+    *
+    * If images are not included in the request,
+    * keep the existing images.
+    *
+    * If images is an empty array,
+    * all images will be removed.
     */
-   const normalizedImages = images === undefined ? product.images : Array.isArray(images) ? images.map((image) => String(image).trim()).filter(Boolean) : [];
+
+   const normalizedImages =
+    images === undefined
+     ? product.images
+     : Array.isArray(images)
+       ? images
+          .filter((image): image is string => typeof image === "string")
+          .map((image) => image.trim())
+          .filter(Boolean)
+       : [];
 
    /*
-    * Update product fields.
+    * ==========================================================
+    * NORMALIZE VIDEOS
+    * ==========================================================
+    *
+    * If videos are not included in the request,
+    * keep the existing videos.
+    *
+    * If videos is an empty array,
+    * all videos will be removed.
     */
+
+   const normalizedVideos =
+    videos === undefined
+     ? product.videos || []
+     : Array.isArray(videos)
+       ? videos
+          .filter((video): video is string => typeof video === "string")
+          .map((video) => video.trim())
+          .filter(Boolean)
+       : [];
+
+   /*
+    * ==========================================================
+    * UPDATE PRODUCT
+    * ==========================================================
+    */
+
    product.name = normalizedName;
+
    product.slug = normalizedSlug;
+
    product.sku = normalizedSku;
+
    product.description = description !== undefined ? String(description).trim() : product.description;
 
    product.categoryId = targetCategoryId;
+
    product.brandId = targetBrandId;
 
    product.price = parsedPrice;
+
    product.compareAtPrice = parsedCompareAtPrice;
+
    product.costPrice = parsedCostPrice;
+
    product.currency = normalizedCurrency;
 
    product.images = normalizedImages;
 
+   product.videos = normalizedVideos;
+
    product.quantity = parsedQuantity;
+
    product.lowStockThreshold = parsedLowStockThreshold;
 
    product.status = normalizedStatus;
@@ -316,6 +430,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
    await product.save();
 
+   /*
+    * ==========================================================
+    * RETURN UPDATED PRODUCT
+    * ==========================================================
+    */
+
    const populatedProduct = await Product.findById(product._id).populate("brandId", "name slug logo").populate("categoryId", "name slug parentId").lean();
 
    return res.status(200).json({
@@ -326,12 +446,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   /*
+   * ============================================================
    * DELETE PRODUCT
+   * ============================================================
    */
+
   if (req.method === "DELETE") {
    const user = await requirePermission(req, "products.delete");
-
-   await connectDB();
 
    const product = await Product.findById(id);
 
@@ -361,6 +482,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     message: "Product deleted successfully.",
    });
   }
+
+  /*
+   * ============================================================
+   * METHOD NOT ALLOWED
+   * ============================================================
+   */
 
   res.setHeader("Allow", ["GET", "PATCH", "DELETE"]);
 
