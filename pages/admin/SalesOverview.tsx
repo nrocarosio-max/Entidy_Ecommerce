@@ -9,7 +9,7 @@ interface SalesOverviewItem {
 }
 
 interface SalesOverviewProps {
- data: SalesOverviewItem[];
+ data?: SalesOverviewItem[];
 }
 
 function formatMoney(amount: number, currency: string) {
@@ -29,7 +29,7 @@ function formatDate(date: string) {
  });
 }
 
-export default function SalesOverview({ data }: SalesOverviewProps) {
+export default function SalesOverview({ data = [] }: SalesOverviewProps) {
  const chartData = useMemo(() => {
   if (!data.length) {
    return [];
