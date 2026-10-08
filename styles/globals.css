@@ -1,0 +1,140 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-start-rgb: 255,255,255;
+  --background-end-rgb: 255, 255, 255;
+  --primary-color: rgb(0 0 0);
+  --second-color: rgb(33, 33,33);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --foreground-rgb: 255, 255, 255;
+    --background-start-rgb: 0, 0, 0;
+    --background-end-rgb: 0, 0, 0;
+    
+  }
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: linear-gradient(
+      to bottom,
+      transparent,
+      rgb(var(--background-end-rgb))
+    )
+    rgb(var(--background-start-rgb));
+}
+.bg-gradient{
+  background: linear-gradient(
+        90deg,
+        rgb(220, 237, 255) 0%,
+        rgb(255, 217, 217) 100%
+    );
+}       
+.container{
+    width: 94%;
+    margin: 0 auto;
+}
+.blogapp{
+  width: 95%;
+  margin: 0 auto;
+}
+.focus-input-none:focus{
+  box-shadow: none !important;
+}
+/* Scrollbar CSS */
+html *::-webkit-scrollbar {
+    border-radius: 0;
+    height: 8px;
+    width: 8px;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+html *::-webkit-scrollbar-thumb {
+    border-radius: 4px;
+    background-color: rgba(0, 0, 0, 0.15);
+    background: linear-gradient(
+            90deg,
+            rgb(139, 151, 163) 0%,
+            rgb(160, 229, 236) 100%
+        );
+}
+
+html *::-webkit-scrollbar-track {
+    border-radius: 0;
+    width: 10px;
+    background-color: rgba(0, 0, 0, 0);
+}
+@media (min-width: 570px) {
+  .container {
+    width: 540px;
+  }
+
+  .blogapp{
+    width: 500px;
+  }
+}
+@media (min-width: 768px) {
+  .container {
+    width: 720px;
+
+  }
+  .blogapp{
+    width: 576px;
+  }
+}
+@media (min-width: 992px) {
+  .container {
+    width: 85%;
+
+  }
+  .blogapp{
+    width: 768px;
+  }
+}
+@media (min-width: 1200px) {
+  .container {
+    width: 85%;
+
+  }
+  .blogapp{
+    width: 912px;
+  }
+}
+@media (min-width: 1400px) {
+  .container {
+    width: 85%;
+
+  }
+  .blogapp{
+    width: 1024px;
+  }
+}
+.text-primary{
+  color: rgba(0 0 0);
+}
+
+
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee {
+  animation: marquee 25s linear infinite;
+}
