@@ -486,7 +486,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
     const productIds = body.items.map((item: any) => item.productId);
 
-    const uniqueProductIds = [...new Set(productIds)];
+    const uniqueProductIds = Array.from(new Set(productIds));
 
     const products = await Product.find({
      _id: {
@@ -514,7 +514,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
     let calculatedSubtotal = 0;
 
-    for (const item of body.items) {
+    for (let index = 0; index < body.items.length; index++) {
+     const item = body.items[index];
      const productId = typeof item.productId === "string" ? item.productId : "";
 
      if (!mongoose.Types.ObjectId.isValid(productId)) {
