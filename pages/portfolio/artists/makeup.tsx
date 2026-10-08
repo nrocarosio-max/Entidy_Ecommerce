@@ -54,7 +54,7 @@ const socialLinks = [
  },
  {
   name: "TikTok",
-  href: "#",
+  href: "https://www.tiktok.com/@tduong.makeup",
   icon: FaTiktok,
  },
  {
@@ -64,7 +64,7 @@ const socialLinks = [
  },
  {
   name: "Facebook",
-  href: "#",
+  href: "https://www.facebook.com/cessy99",
   icon: FaFacebookF,
  },
 ];
