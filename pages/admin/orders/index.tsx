@@ -5,6 +5,7 @@ import {
  FaBox,
  FaCalendarAlt,
  FaCheckCircle,
+ FaEdit,
  FaChevronLeft,
  FaChevronRight,
  FaEye,
@@ -50,7 +51,7 @@ interface PopulatedNextStatus {
  isActive?: boolean;
 }
 
-interface OrderStatVNĐata {
+interface OrderStatusData {
  _id: string;
  name: string;
  code: string;
@@ -132,7 +133,7 @@ interface Order {
  storeId?: string | { _id: string; name?: string; slug?: string };
  customerId?: Customer | string | null;
  customerSnapshot?: Customer;
- statusId?: OrderStatVNĐata | string | null;
+ statusId?: OrderStatusData | string | null;
  paymentMethod?: string;
  paymentStatus?: string;
  currency?: string;
@@ -154,6 +155,38 @@ interface Order {
   | string
   | null;
  customer?: Customer;
+ items?: OrderItemDetail[];
+
+ affiliateId?:
+  | {
+     _id?: string;
+     name?: string;
+     email?: string;
+    }
+  | string
+  | null;
+
+ affiliateUserId?:
+  | {
+     _id?: string;
+     name?: string;
+     email?: string;
+    }
+  | string
+  | null;
+
+ affiliateStoreId?:
+  | {
+     _id?: string;
+     name?: string;
+     storeName?: string;
+    }
+  | string
+  | null;
+
+ affiliateCommission?: number;
+ commissionAmount?: number;
+ hasAffiliate?: boolean;
 }
 
 interface Pagination {
@@ -186,7 +219,13 @@ interface OrderDetailResponse {
  history?: OrderHistoryItem[];
  paymentHistory?: PaymentStatusHistoryItem[];
 }
-
+interface EditableOrderItem {
+ productId: string;
+ productName: string;
+ sku: string;
+ quantity: number;
+ price: number;
+}
 const PAGE_SIZE = 20;
 
 const PAYMENT_STATUS_OPTIONS = [
@@ -237,7 +276,7 @@ const getCustomer = (order: Order): Customer => {
  return {};
 };
 
-const getOrderStatus = (order: Order): OrderStatVNĐata | null => {
+const getOrderStatus = (order: Order): OrderStatusData | null => {
  if (order.statusId && typeof order.statusId === "object") {
   return order.statusId;
  }
@@ -245,7 +284,7 @@ const getOrderStatus = (order: Order): OrderStatVNĐata | null => {
  return null;
 };
 
-const getForwardStatuses = (currentStatus: OrderStatVNĐata | null, statuses: OrderStatusOption[]): OrderStatusOption[] => {
+const getForwardStatuses = (currentStatus: OrderStatusData | null, statuses: OrderStatusOption[]): OrderStatusOption[] => {
  if (!currentStatus) {
   return statuses;
  }
@@ -313,7 +352,7 @@ export default function OrdersPage() {
  const [search, setSearch] = useState("");
  const [dateFrom, setDateFrom] = useState("");
  const [dateTo, setDateTo] = useState("");
-
+ const [deletedFilter, setDeletedFilter] = useState<"active" | "deleted" | "all">("active");
  const [page, setPage] = useState(1);
  const [pagination, setPagination] = useState<Pagination>({
   page: 1,
@@ -321,7 +360,30 @@ export default function OrdersPage() {
   total: 0,
   totalPages: 0,
  });
+ const [isEditOpen, setIsEditOpen] = useState(false);
+ const [isSavingEdit, setIsSavingEdit] = useState(false);
 
+ const [editingOrder, setEditingOrder] = useState<Order | null>(null);
+
+ const [editCustomer, setEditCustomer] = useState({
+  name: "",
+  phone: "",
+  email: "",
+ });
+
+ const [editAddress, setEditAddress] = useState({
+  address: "",
+  province: "",
+  district: "",
+  zipcode: "",
+ });
+
+ const [editShippingFee, setEditShippingFee] = useState(0);
+ const [editDiscount, setEditDiscount] = useState(0);
+ const [editShippingMethod, setEditShippingMethod] = useState("");
+ const [editTrackingNumber, setEditTrackingNumber] = useState("");
+ const [editNote, setEditNote] = useState("");
+ const [editItems, setEditItems] = useState<EditableOrderItem[]>([]);
  const [summary, setSummary] = useState<Summary>({
   totalOrders: 0,
   totalAmount: 0,
@@ -456,6 +518,7 @@ export default function OrdersPage() {
    params.set("storeId", isSuperAdmin ? selectedStoreId : user?.storeId || "");
    params.set("page", String(page));
    params.set("limit", String(PAGE_SIZE));
+   params.set("deleted", deletedFilter);
 
    if (search.trim()) params.set("search", search.trim());
    if (selectedStatusId) params.set("statusId", selectedStatusId);
@@ -495,7 +558,7 @@ export default function OrdersPage() {
   } finally {
    setLoading(false);
   }
- }, [sessionStatus, isSuperAdmin, selectedStoreId, user?.storeId, page, search, selectedStatusId, selectedPaymentStatus, dateFrom, dateTo]);
+ }, [sessionStatus, isSuperAdmin, selectedStoreId, user?.storeId, page, search, selectedStatusId, selectedPaymentStatus, dateFrom, dateTo, deletedFilter]);
 
  useEffect(() => {
   if (sessionStatus === "authenticated") {
@@ -531,6 +594,7 @@ export default function OrdersPage() {
   setDateTo("");
   setPage(1);
   setNotice("");
+  setDeletedFilter("active");
  };
 
  const handleStoreChange = (value: string) => {
@@ -699,6 +763,141 @@ export default function OrdersPage() {
   }
  };
 
+ const openEditOrder = async (orderId: string) => {
+  setIsEditOpen(false);
+  setIsSavingEdit(false);
+  setEditingOrder(null);
+  setError("");
+  setNotice("");
+
+  try {
+   const response = await fetch(`/api/admin/orders/${orderId}`);
+   const result: OrderDetailResponse = await response.json();
+
+   if (!response.ok || !result.success || !result.order) {
+    throw new Error(result.message || "Unable to load order for editing.");
+   }
+
+   const order = result.order;
+   const customer = getCustomer(order);
+   const address = order.shippingAddress || {};
+
+   setEditingOrder(order);
+
+   setEditCustomer({
+    name: customer.name || "",
+    phone: customer.phone || "",
+    email: customer.email || "",
+   });
+
+   setEditAddress({
+    address: address.address || "",
+    province: address.province || "",
+    district: address.district || "",
+    zipcode: address.postalCode || "",
+   });
+
+   setEditShippingFee(Number(order.shippingFee || 0));
+   setEditDiscount(Number(order.discount || 0));
+   setEditShippingMethod(order.shippingMethod || "");
+   setEditTrackingNumber(order.trackingNumber || "");
+   setEditNote(order.note || "");
+
+   setEditItems(
+    (result.items || []).map((item) => {
+     const product = item.productId && typeof item.productId === "object" ? item.productId : undefined;
+
+     const productId = typeof item.productId === "string" ? item.productId : item.productId?._id || "";
+
+     return {
+      productId,
+      productName: item.productSnapshot?.name || product?.name || "Product",
+      sku: item.productSnapshot?.sku || product?.sku || "",
+      quantity: Number(item.quantity || 1),
+      price: Number(item.price || 0),
+     };
+    }),
+   );
+
+   setIsEditOpen(true);
+  } catch (err) {
+   setError(err instanceof Error ? err.message : "Unable to load order for editing.");
+  }
+ };
+
+ const saveEditOrder = async () => {
+  if (!editingOrder || isSavingEdit) return;
+
+  if (!editCustomer.name.trim() || !editCustomer.phone.trim() || !editAddress.address.trim()) {
+   setError("Please enter the customer's name, phone, and address.");
+   return;
+  }
+
+  if (
+   editItems.length === 0 ||
+   editItems.some((item) => !item.productId || !Number.isInteger(item.quantity) || item.quantity < 1 || !Number.isFinite(item.price) || item.price < 0)
+  ) {
+   setError("Please check the products, quantities, and prices.");
+   return;
+  }
+
+  setIsSavingEdit(true);
+  setError("");
+  setNotice("");
+
+  try {
+   const response = await fetch(`/api/admin/orders/${editingOrder._id}`, {
+    method: "PATCH",
+    headers: {
+     "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+     customerSnapshot: {
+      name: editCustomer.name.trim(),
+      phone: editCustomer.phone.trim(),
+      email: editCustomer.email.trim(),
+     },
+     shippingAddress: {
+      address: editAddress.address.trim(),
+      province: editAddress.province.trim(),
+      district: editAddress.district.trim(),
+      postalCode: editAddress.zipcode.trim(),
+     },
+     shippingFee: Number(editShippingFee),
+     discount: Number(editDiscount),
+     shippingMethod: editShippingMethod.trim(),
+     trackingNumber: editTrackingNumber.trim(),
+     note: editNote.trim(),
+     items: editItems.map((item) => ({
+      productId: item.productId,
+      quantity: Number(item.quantity),
+      price: Number(item.price),
+     })),
+    }),
+   });
+
+   const result = await response.json();
+
+   if (!response.ok || !result.success) {
+    throw new Error(result.message || "Unable to update order.");
+   }
+
+   setIsEditOpen(false);
+   setEditingOrder(null);
+   setNotice(result.message || "Order updated successfully.");
+
+   await loadOrders();
+
+   if (detailOrder?._id === editingOrder._id) {
+    await openOrderDetail(editingOrder._id);
+   }
+  } catch (err) {
+   setError(err instanceof Error ? err.message : "Unable to update order.");
+  } finally {
+   setIsSavingEdit(false);
+  }
+ };
+
  const saveDetailStatus = async () => {
   if (!detailOrder || !detailStatusId || savingDetailStatus) return;
 
@@ -781,7 +980,13 @@ export default function OrdersPage() {
  const currentDetailStatus = detailOrder ? getOrderStatus(detailOrder) : null;
 
  const detailNextStatuses = getForwardStatuses(currentDetailStatus, statusOptions);
+ const updateEditItem = (index: number, field: "quantity" | "price", value: number) => {
+  setEditItems((currentItems) => currentItems.map((item, itemIndex) => (itemIndex === index ? { ...item, [field]: value } : item)));
+ };
 
+ const removeEditItem = (index: number) => {
+  setEditItems((currentItems) => currentItems.filter((_, itemIndex) => itemIndex !== index));
+ };
  return (
   <div className="min-h-screen bg-gray-50 p-4 text-gray-800 sm:p-6 lg:p-8">
    <div className="mx-auto max-w-[1600px] space-y-6">
@@ -1011,7 +1216,21 @@ export default function OrdersPage() {
         className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none focus:border-gray-500"
        />
       </div>
+      <div>
+       <label className="mb-1.5 block text-xs font-semibold text-gray-600">Order deletion status</label>
 
+       <select
+        value={deletedFilter}
+        onChange={(event) => {
+         setDeletedFilter(event.target.value as "active" | "deleted" | "all");
+         setPage(1);
+        }}
+        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-gray-500">
+        <option value="active">Active orders</option>
+        <option value="deleted">Deleted orders</option>
+        <option value="all">All orders</option>
+       </select>
+      </div>
       <div>
        <label className="mb-1.5 block text-xs font-semibold text-gray-600">To date</label>
        <input
@@ -1062,8 +1281,8 @@ export default function OrdersPage() {
       </div>
      ) : (
       <>
-       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1050px] text-left text-sm">
+       <div className="w-full overflow-x-auto">
+        <table className="w-max min-w-[2200px] table-fixed text-left text-sm">
          <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
           <tr>
            <th className="px-5 py-4 font-semibold">Order</th>
@@ -1188,6 +1407,14 @@ export default function OrdersPage() {
                <FaEye />
                View details
               </button>
+
+              <button
+               type="button"
+               onClick={() => void openEditOrder(order._id)}
+               className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100">
+               <FaEdit />
+               Edit
+              </button>
              </td>
             </tr>
            );
@@ -1230,7 +1457,6 @@ export default function OrdersPage() {
      )}
     </div>
    </div>
-
    {/* Order detail popup */}
    {(detailLoading || detailOrder) && (
     <div
@@ -1632,6 +1858,296 @@ export default function OrdersPage() {
        </footer>
       )}
      </section>
+    </div>
+   )}
+
+   {/* Edit Order Modal */}
+   {isEditOpen && editingOrder && (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-3 sm:p-6">
+     <div className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b px-5 py-4 sm:px-7">
+       <div>
+        <h2 className="text-xl font-bold text-gray-900">Edit Order</h2>
+        <p className="mt-1 text-sm text-gray-500">Order ID: {editingOrder._id}</p>
+       </div>
+
+       <button
+        type="button"
+        onClick={() => {
+         if (!isSavingEdit) {
+          setIsEditOpen(false);
+          setEditingOrder(null);
+         }
+        }}
+        disabled={isSavingEdit}
+        className="rounded-lg p-2 text-gray-500 hover:bg-gray-100 disabled:opacity-50"
+        aria-label="Close edit form">
+        ✕
+       </button>
+      </div>
+
+      {/* Form content */}
+      <div className="flex-1 space-y-6 overflow-y-auto p-5 sm:p-7">
+       {/* Customer information */}
+       <section>
+        <h3 className="mb-3 font-semibold text-gray-900">Customer Information</h3>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+         <label className="text-sm text-gray-700">
+          Full name *
+          <input
+           value={editCustomer.name}
+           onChange={(event) =>
+            setEditCustomer({
+             ...editCustomer,
+             name: event.target.value,
+            })
+           }
+           className="mt-1 w-full rounded-lg border px-3 py-2.5 outline-none focus:border-blue-500"
+           required
+          />
+         </label>
+
+         <label className="text-sm text-gray-700">
+          Phone *
+          <input
+           value={editCustomer.phone}
+           onChange={(event) =>
+            setEditCustomer({
+             ...editCustomer,
+             phone: event.target.value,
+            })
+           }
+           className="mt-1 w-full rounded-lg border px-3 py-2.5 outline-none focus:border-blue-500"
+           required
+          />
+         </label>
+
+         <label className="text-sm text-gray-700 sm:col-span-2">
+          Email
+          <input
+           type="email"
+           value={editCustomer.email}
+           onChange={(event) =>
+            setEditCustomer({
+             ...editCustomer,
+             email: event.target.value,
+            })
+           }
+           className="mt-1 w-full rounded-lg border px-3 py-2.5 outline-none focus:border-blue-500"
+          />
+         </label>
+        </div>
+       </section>
+
+       {/* Shipping address */}
+       <section>
+        <h3 className="mb-3 font-semibold text-gray-900">Shipping Address</h3>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+         <label className="text-sm text-gray-700 sm:col-span-2">
+          Address *
+          <input
+           value={editAddress.address}
+           onChange={(event) =>
+            setEditAddress({
+             ...editAddress,
+             address: event.target.value,
+            })
+           }
+           className="mt-1 w-full rounded-lg border px-3 py-2.5 outline-none focus:border-blue-500"
+           required
+          />
+         </label>
+
+         <label className="text-sm text-gray-700">
+          Province / State
+          <input
+           value={editAddress.province}
+           onChange={(event) =>
+            setEditAddress({
+             ...editAddress,
+             province: event.target.value,
+            })
+           }
+           className="mt-1 w-full rounded-lg border px-3 py-2.5 outline-none focus:border-blue-500"
+          />
+         </label>
+
+         <label className="text-sm text-gray-700">
+          District / City
+          <input
+           value={editAddress.district}
+           onChange={(event) =>
+            setEditAddress({
+             ...editAddress,
+             district: event.target.value,
+            })
+           }
+           className="mt-1 w-full rounded-lg border px-3 py-2.5 outline-none focus:border-blue-500"
+          />
+         </label>
+
+         <label className="text-sm text-gray-700">
+          Postal Code
+          <input
+           value={editAddress.zipcode}
+           onChange={(event) =>
+            setEditAddress({
+             ...editAddress,
+             zipcode: event.target.value,
+            })
+           }
+           className="mt-1 w-full rounded-lg border px-3 py-2.5 outline-none focus:border-blue-500"
+          />
+         </label>
+        </div>
+       </section>
+
+       {/* Order items */}
+       <section>
+        <div className="mb-3 flex items-center justify-between">
+         <h3 className="font-semibold text-gray-900">Order Items</h3>
+         <span className="text-xs text-gray-500">Edit quantity and unit price</span>
+        </div>
+
+        <div className="space-y-3">
+         {editItems.map((item, index) => (
+          <div key={`${item.productId}-${index}`} className="rounded-xl border p-4">
+           <div className="mb-3 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+             <p className="break-words font-medium text-gray-900">{item.productName}</p>
+             {item.sku && <p className="mt-1 text-xs text-gray-500">SKU: {item.sku}</p>}
+            </div>
+
+            <button
+             type="button"
+             onClick={() => removeEditItem(index)}
+             className="shrink-0 rounded-lg px-2 py-1 text-sm font-medium text-red-600 hover:bg-red-50">
+             Remove
+            </button>
+           </div>
+
+           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <label className="text-sm text-gray-700">
+             Quantity
+             <input
+              type="number"
+              min={1}
+              step={1}
+              value={item.quantity}
+              onChange={(event) => updateEditItem(index, "quantity", Number(event.target.value))}
+              className="mt-1 w-full rounded-lg border px-3 py-2 outline-none focus:border-blue-500"
+             />
+            </label>
+
+            <label className="text-sm text-gray-700">
+             Unit Price
+             <input
+              type="number"
+              min={0}
+              step="0.01"
+              value={item.price}
+              onChange={(event) => updateEditItem(index, "price", Number(event.target.value))}
+              className="mt-1 w-full rounded-lg border px-3 py-2 outline-none focus:border-blue-500"
+             />
+            </label>
+
+            <div className="text-sm text-gray-700">
+             Line Total
+             <p className="mt-1 rounded-lg bg-gray-50 px-3 py-2 font-semibold text-gray-900">{(item.quantity * item.price).toLocaleString()}</p>
+            </div>
+           </div>
+          </div>
+         ))}
+
+         {editItems.length === 0 && <p className="rounded-xl border border-dashed p-6 text-center text-sm text-gray-500">No products in this order.</p>}
+        </div>
+       </section>
+
+       {/* Shipping and discount */}
+       <section>
+        <h3 className="mb-3 font-semibold text-gray-900">Additional Charges</h3>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+         <label className="text-sm text-gray-700">
+          Shipping Fee
+          <input
+           type="number"
+           min={0}
+           value={editShippingFee}
+           onChange={(event) => setEditShippingFee(Number(event.target.value))}
+           className="mt-1 w-full rounded-lg border px-3 py-2.5 outline-none focus:border-blue-500"
+          />
+         </label>
+
+         <label className="text-sm text-gray-700">
+          Discount
+          <input
+           type="number"
+           min={0}
+           value={editDiscount}
+           onChange={(event) => setEditDiscount(Number(event.target.value))}
+           className="mt-1 w-full rounded-lg border px-3 py-2.5 outline-none focus:border-blue-500"
+          />
+         </label>
+
+         <label className="text-sm text-gray-700">
+          Shipping Method
+          <input
+           value={editShippingMethod}
+           onChange={(event) => setEditShippingMethod(event.target.value)}
+           className="mt-1 w-full rounded-lg border px-3 py-2.5 outline-none focus:border-blue-500"
+          />
+         </label>
+
+         <label className="text-sm text-gray-700">
+          Tracking Number
+          <input
+           value={editTrackingNumber}
+           onChange={(event) => setEditTrackingNumber(event.target.value)}
+           className="mt-1 w-full rounded-lg border px-3 py-2.5 outline-none focus:border-blue-500"
+          />
+         </label>
+
+         <label className="text-sm text-gray-700 sm:col-span-2">
+          Order Note
+          <textarea
+           rows={3}
+           value={editNote}
+           onChange={(event) => setEditNote(event.target.value)}
+           className="mt-1 w-full rounded-lg border px-3 py-2.5 outline-none focus:border-blue-500"
+          />
+         </label>
+        </div>
+       </section>
+      </div>
+
+      {/* Footer */}
+      <div className="flex flex-col-reverse gap-3 border-t bg-gray-50 px-5 py-4 sm:flex-row sm:justify-end sm:px-7">
+       <button
+        type="button"
+        onClick={() => {
+         if (!isSavingEdit) {
+          setIsEditOpen(false);
+          setEditingOrder(null);
+         }
+        }}
+        disabled={isSavingEdit}
+        className="rounded-lg border bg-white px-5 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-50">
+        Cancel
+       </button>
+
+       <button
+        type="button"
+        onClick={() => void saveEditOrder()}
+        disabled={isSavingEdit}
+        className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
+        {isSavingEdit ? "Saving..." : "Save Changes"}
+       </button>
+      </div>
+     </div>
     </div>
    )}
   </div>

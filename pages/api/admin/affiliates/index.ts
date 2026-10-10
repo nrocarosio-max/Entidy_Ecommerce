@@ -372,7 +372,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
    }
 
-   // Validate the store configuration before updating.
+   // Validate store configuration before updating.
    const storeUpdates: Array<{
     storeId: string;
     commissionRate?: number;
@@ -390,14 +390,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
      }
 
-     if (seenStoreIds.has(item.storeId)) {
+     const normalizedStoreId = item.storeId;
+
+     if (seenStoreIds.has(normalizedStoreId)) {
       return res.status(400).json({
        success: false,
        message: "Duplicate store ID.",
       });
      }
 
-     seenStoreIds.add(item.storeId);
+     seenStoreIds.add(normalizedStoreId);
 
      if (
       item.commissionRate !== undefined &&
@@ -417,24 +419,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
      }
 
      storeUpdates.push({
-      storeId: item.storeId,
+      storeId: normalizedStoreId,
       commissionRate: item.commissionRate,
       status: item.status,
      });
     }
 
-    const existingLinks = await AffiliateStore.find({
-     affiliateId: affiliate._id,
-     storeId: { $in: storeUpdates.map((item) => item.storeId) },
-    }).select("storeId");
+    const requestedStoreIds = storeUpdates.map((item) => item.storeId);
+
+    const [existingLinks, storesInDatabase] = await Promise.all([
+     AffiliateStore.find({
+      affiliateId: affiliate._id,
+      storeId: { $in: requestedStoreIds },
+     }).select("storeId"),
+
+     Store.find({
+      _id: { $in: requestedStoreIds },
+     }).select("_id name isActive"),
+    ]);
 
     const existingStoreIds = new Set(existingLinks.map((item) => String(item.storeId)));
 
-    if (storeUpdates.some((item) => !existingStoreIds.has(item.storeId))) {
-     return res.status(400).json({
-      success: false,
-      message: "This endpoint can update existing store links only.",
-     });
+    const storeMap = new Map(storesInDatabase.map((store) => [String(store._id), store]));
+
+    for (const item of storeUpdates) {
+     const store = storeMap.get(item.storeId);
+
+     if (!store) {
+      return res.status(400).json({
+       success: false,
+       message: `Store ${item.storeId} not found.`,
+      });
+     }
+
+     // New links can only be created for active stores.
+     if (!existingStoreIds.has(item.storeId) && !store.isActive) {
+      return res.status(400).json({
+       success: false,
+       message: `Store "${store.name}" is inactive.`,
+      });
+     }
     }
    }
 
@@ -481,28 +505,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    if (normalizedCode !== undefined) affiliate.code = normalizedCode;
    if (note !== undefined) affiliate.note = note.trim();
 
-   // Save all requested store commission changes.
+   // Create new store links or update existing links.
    for (const item of storeUpdates) {
-    const update: Record<string, unknown> = {};
+    const existingLink = await AffiliateStore.findOne({
+     affiliateId: affiliate._id,
+     storeId: item.storeId,
+    });
 
-    if (item.commissionRate !== undefined) {
-     update.commissionRate = item.commissionRate;
+    if (existingLink) {
+     // Update only the fields explicitly provided.
+     if (item.commissionRate !== undefined) {
+      existingLink.commissionRate = item.commissionRate;
+     }
+
+     if (item.status !== undefined) {
+      existingLink.status = item.status;
+     }
+
+     await existingLink.save();
+     continue;
     }
 
-    if (item.status !== undefined) {
-     update.status = item.status;
-    }
+    // Default status depends on the Affiliate and User status.
+    const shouldActivate = affiliate.status === "ACTIVE" && user.isActive === true;
 
-    if (Object.keys(update).length > 0) {
-     await AffiliateStore.updateOne(
-      {
-       affiliateId: affiliate._id,
-       storeId: item.storeId,
-      },
-      { $set: update },
-     );
-    }
+    await AffiliateStore.create({
+     affiliateId: affiliate._id,
+     storeId: item.storeId,
+     commissionRate: item.commissionRate ?? 5,
+     status: shouldActivate ? "ACTIVE" : "INACTIVE",
+     approvedBy: null,
+     approvedAt: null,
+     note: "",
+    });
    }
+
+   await Promise.all([user.save(), affiliate.save()]);
 
    await Promise.all([user.save(), affiliate.save()]);
 

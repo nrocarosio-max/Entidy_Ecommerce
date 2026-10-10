@@ -59,6 +59,7 @@ interface EditForm {
   storeId: string;
   commissionRate: number;
   status: "ACTIVE" | "INACTIVE" | "SUSPENDED";
+  isNew?: boolean;
  }[];
 }
 export default function AffiliatesPage() {
@@ -183,6 +184,46 @@ export default function AffiliatesPage() {
     commissionRate: item.commissionRate,
     status: item.status,
    })),
+  });
+ };
+
+ const addStore = (newStoreId: string) => {
+  if (!editForm || !newStoreId) return;
+
+  const alreadyAdded = editForm.stores.some((item) => item.storeId === newStoreId);
+
+  if (alreadyAdded) {
+   setEditMessage("This store has already been assigned.");
+   return;
+  }
+
+  setEditForm({
+   ...editForm,
+   stores: [
+    ...editForm.stores,
+    {
+     storeId: newStoreId,
+     commissionRate: 5,
+     status: editForm.status === "ACTIVE" && editForm.isActive ? "ACTIVE" : "INACTIVE",
+     isNew: true,
+    },
+   ],
+  });
+
+  setEditMessage("");
+ };
+
+ const removeNewStore = (storeId: string) => {
+  if (!editForm) return;
+
+  const storeToRemove = editForm.stores.find((item) => item.storeId === storeId);
+
+  // Existing store links are retained.
+  if (!storeToRemove?.isNew) return;
+
+  setEditForm({
+   ...editForm,
+   stores: editForm.stores.filter((item) => item.storeId !== storeId),
   });
  };
 
@@ -535,17 +576,44 @@ export default function AffiliatesPage() {
       </div>
 
       <div className="mt-5">
-       <h3 className="mb-3 text-sm font-semibold text-gray-900">Store commissions</h3>
+       <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+         <h3 className="text-sm font-semibold text-gray-900">Store commissions</h3>
+         <p className="mt-1 text-xs text-gray-500">Configure a separate commission rate for each store.</p>
+        </div>
+
+        <select
+         defaultValue=""
+         onChange={(e) => {
+          addStore(e.target.value);
+          e.target.value = "";
+         }}
+         className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm">
+         <option value="">+ Add store</option>
+         {stores
+          .filter((store) => !editForm.stores.some((item) => item.storeId === store._id) && store.isActive)
+          .map((store) => (
+           <option key={store._id} value={store._id}>
+            {store.name}
+           </option>
+          ))}
+        </select>
+       </div>
 
        <div className="space-y-3">
         {editForm.stores.map((item, index) => {
          const store = stores.find((s) => s._id === item.storeId);
 
          return (
-          <div key={item.storeId} className="grid gap-3 rounded-lg border border-gray-200 bg-white p-4 md:grid-cols-[1fr_150px_180px]">
+          <div key={item.storeId} className="grid gap-3 rounded-lg border border-gray-200 bg-white p-4 md:grid-cols-[1fr_150px_180px_auto]">
            <div className="self-center">
-            <p className="font-medium text-gray-900">{store?.name || "Unknown store"}</p>
-            <p className="text-xs text-gray-500">{item.storeId}</p>
+            <div className="flex flex-wrap items-center gap-2">
+             <p className="font-medium text-gray-900">{store?.name || "Unknown store"}</p>
+
+             {item.isNew && <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">New</span>}
+            </div>
+
+            <p className="mt-1 text-xs text-gray-500">{store?.slug || item.storeId}</p>
            </div>
 
            <label className="text-sm text-gray-700">
@@ -558,11 +626,16 @@ export default function AffiliatesPage() {
              value={item.commissionRate}
              onChange={(e) => {
               const nextStores = [...editForm.stores];
+
               nextStores[index] = {
                ...nextStores[index],
-               commissionRate: Number(e.target.value),
+               commissionRate: e.target.value === "" ? 0 : Number(e.target.value),
               };
-              setEditForm({ ...editForm, stores: nextStores });
+
+              setEditForm({
+               ...editForm,
+               stores: nextStores,
+              });
              }}
              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2"
             />
@@ -574,11 +647,16 @@ export default function AffiliatesPage() {
              value={item.status}
              onChange={(e) => {
               const nextStores = [...editForm.stores];
+
               nextStores[index] = {
                ...nextStores[index],
                status: e.target.value as EditForm["stores"][number]["status"],
               };
-              setEditForm({ ...editForm, stores: nextStores });
+
+              setEditForm({
+               ...editForm,
+               stores: nextStores,
+              });
              }}
              className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2">
              <option value="ACTIVE">Active</option>
@@ -586,9 +664,29 @@ export default function AffiliatesPage() {
              <option value="SUSPENDED">Suspended</option>
             </select>
            </label>
+
+           <div className="flex items-center">
+            {item.isNew ? (
+             <button
+              type="button"
+              onClick={() => removeNewStore(item.storeId)}
+              className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-600 hover:bg-red-50">
+              Remove
+             </button>
+            ) : (
+             <span className="text-xs text-gray-400">Existing link</span>
+            )}
+           </div>
           </div>
          );
         })}
+
+        {editForm.stores.length === 0 && (
+         <div className="rounded-lg border border-dashed border-gray-300 p-6 text-center">
+          <p className="text-sm text-gray-500">No stores assigned to this Affiliate.</p>
+          <p className="mt-1 text-xs text-gray-400">Select a store above to create a new link.</p>
+         </div>
+        )}
        </div>
       </div>
 

@@ -126,7 +126,7 @@ function getOrderNumber(commission: Commission) {
  return commission.orderId?.orderNumber || commission.orderNumber || commission.orderId?._id || "—";
 }
 
-const AffiliateDashboard: NextPage = () => {
+export default function AffiliateDashboard() {
  const [profile, setProfile] = useState<AffiliateProfile | null>(null);
  const [stats, setStats] = useState<CommissionStats | null>(null);
  const [commissions, setCommissions] = useState<Commission[]>([]);
@@ -476,7 +476,7 @@ const AffiliateDashboard: NextPage = () => {
    </main>
   </>
  );
-};
+}
 
 type StatCardProps = {
  title: string;
@@ -508,5 +508,3 @@ function StatCard({ title, value, description, icon, highlight = false }: StatCa
 }
 
 AffiliateDashboard.Layout = "Default";
-
-export default AffiliateDashboard;

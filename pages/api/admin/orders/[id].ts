@@ -59,7 +59,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   if (req.method === "GET") {
    const user = await requirePermission(req, "orders.read");
 
-   const order = await Order.findById(id)
+   const order = await Order.findOne({
+    _id: id,
+    isDeleted: { $ne: true },
+   })
     .populate("customerId")
     .populate("createdBy", "name email")
     .populate("storeId", "name slug")
@@ -111,6 +114,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
    const user = await requirePermission(req, "orders.update");
 
    const body = req.body || {};
+   const allowedOrderFields = ["customerSnapshot", "shippingAddress", "shippingFee", "discount", "note", "shippingMethod", "trackingNumber"] as const;
    const note = typeof body.note === "string" ? body.note.trim() : "";
 
    const session = await mongoose.startSession();
@@ -123,10 +127,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     await session.withTransaction(async () => {
      const currentOrder = await Order.findById(id).session(session);
 
-     if (!currentOrder) {
+     if (!currentOrder || currentOrder.isDeleted) {
       throw new Error("ORDER_NOT_FOUND");
      }
+     // Prevent editing items when a delivered order already has commissions.
+     if (Object.prototype.hasOwnProperty.call(req.body, "items")) {
+      const [currentStatus, commissions] = await Promise.all([
+       OrderStatus.findById(currentOrder.statusId).session(session).lean(),
 
+       AffiliateCommission.find({
+        orderId: currentOrder._id,
+       })
+        .select("_id")
+        .session(session)
+        .lean(),
+      ]);
+
+      if (currentStatus?.code === "DELIVERED" && commissions.length > 0) {
+       throw new Error("DELIVERED_ORDER_ITEMS_LOCKED");
+      }
+     }
      if (user.role !== "SUPER_ADMIN" && getId(currentOrder.storeId) !== getId(user.storeId)) {
       throw new Error("FORBIDDEN");
      }
@@ -141,12 +161,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
        throw new Error("INVALID_PAYMENT_STATUS");
       }
 
-      const previousStatus = currentOrder.paymentStatus as PaymentStatus;
-      const newStatus = body.paymentStatus;
+      const previousPaymentStatus = currentOrder.paymentStatus as PaymentStatus;
+      const newPaymentStatus = body.paymentStatus;
 
-      if (previousStatus !== newStatus) {
-       currentOrder.paymentStatus = newStatus;
-
+      if (previousPaymentStatus !== newPaymentStatus) {
+       currentOrder.paymentStatus = newPaymentStatus;
        await currentOrder.save({ session });
 
        await PaymentStatusHistory.create(
@@ -154,8 +173,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
          {
           orderId: currentOrder._id,
           storeId: currentOrder.storeId,
-          previousStatus,
-          newStatus,
+          previousStatus: previousPaymentStatus,
+          newStatus: newPaymentStatus,
           changedBy: user.id,
           note,
          },
@@ -169,225 +188,499 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
      }
 
      /*
-      * ORDER STATUS UPDATE
+      * UPDATE ORDER ITEMS
       */
-     const requestedStatusId = typeof body.statusId === "string" ? body.statusId : "";
+     if (Object.prototype.hasOwnProperty.call(body, "items")) {
+      if (!Array.isArray(body.items)) {
+       throw new Error("INVALID_ORDER_ITEMS");
+      }
 
-     if (!requestedStatusId || !mongoose.Types.ObjectId.isValid(requestedStatusId)) {
-      throw new Error("INVALID_STATUS_ID");
-     }
+      if (body.items.length === 0) {
+       throw new Error("ORDER_ITEMS_REQUIRED");
+      }
 
-     const previousStatusId = getId(currentOrder.statusId);
+      const currentStatus = await OrderStatus.findById(currentOrder.statusId).session(session).lean();
 
-     if (previousStatusId === requestedStatusId) {
-      updatedOrderId = currentOrder._id.toString();
-      return;
-     }
+      if (!currentStatus) {
+       throw new Error("CURRENT_STATUS_NOT_FOUND");
+      }
 
-     const [previousStatus, newStatus] = await Promise.all([
-      OrderStatus.findById(previousStatusId).session(session),
+      const statusCode = String(currentStatus.code || "").toUpperCase();
 
-      OrderStatus.findOne({
-       _id: requestedStatusId,
-       isActive: true,
-      }).session(session),
-     ]);
-     console.log("STATUS TRANSITION DEBUG", {
-      orderId: String(currentOrder._id),
-      currentStatusId: previousStatus ? String(previousStatus._id) : null,
-      currentStatusName: previousStatus?.name ?? null,
-      currentStatusCode: previousStatus?.code ?? null,
-      requestedStatusId: String(requestedStatusId),
-      requestedStatusCode: newStatus?.code ?? null,
-      allowedNextStatusIds: (previousStatus?.nextStatusIds ?? []).map((item: any) => String(item?._id ?? item)),
-     });
-     if (!previousStatus) {
-      throw new Error("CURRENT_STATUS_NOT_FOUND");
-     }
-     if (!newStatus) {
-      throw new Error("STATUS_NOT_FOUND");
-     }
+      const oldItems = await OrderItem.find({
+       orderId: currentOrder._id,
+      })
+       .session(session)
+       .lean();
 
-     const requestedStatusObjectId = String(newStatus._id);
-     console.log("ORDER STATUS UPDATE", {
-      orderId: String(currentOrder._id),
-      fromStatus: previousStatus.name,
-      fromStatusCode: previousStatus.code,
-      toStatus: newStatus.name,
-      toStatusCode: newStatus.code,
-     });
+      /*
+       * Validate submitted items.
+       * Duplicate product IDs are rejected to prevent
+       * inconsistent quantities and commission records.
+       */
+      const seenProductIds = new Set<string>();
 
-     /*
-      * Deduct stock when an order first reaches CONFIRMED.
-      * This assumes stock has not already been deducted.
-      */
-     const previousCode = String(previousStatus?.code || "").toUpperCase();
-     const newCode = String(newStatus.code || "").toUpperCase();
+      const normalizedItems = body.items.map((item: unknown) => {
+       if (!item || typeof item !== "object" || Array.isArray(item)) {
+        throw new Error("INVALID_ORDER_ITEM");
+       }
 
-     if (previousCode !== "CONFIRMED" && newCode === "CONFIRMED") {
-      const orderItems = await OrderItem.find({ orderId: id }).session(session).lean();
+       const value = item as Record<string, unknown>;
 
-      for (const item of orderItems) {
-       const product = await Product.findOne({
-        _id: item.productId,
-        storeId: currentOrder.storeId,
-       }).session(session);
+       const productId = typeof value.productId === "string" ? value.productId : "";
 
-       if (!product) {
+       if (!productId || !mongoose.Types.ObjectId.isValid(productId)) {
+        throw new Error("INVALID_ORDER_ITEM_PRODUCT");
+       }
+
+       if (seenProductIds.has(productId)) {
+        throw new Error("DUPLICATE_ORDER_ITEM_PRODUCT");
+       }
+
+       seenProductIds.add(productId);
+
+       const quantity = value.quantity;
+       const price = value.price;
+
+       if (typeof quantity !== "number" || !Number.isSafeInteger(quantity) || quantity < 1) {
+        throw new Error("INVALID_ORDER_ITEM_QUANTITY");
+       }
+
+       if (typeof price !== "number" || !Number.isFinite(price) || price < 0) {
+        throw new Error("INVALID_ORDER_ITEM_PRICE");
+       }
+
+       const subtotal = Math.round(price * quantity * 100) / 100;
+
+       if (!Number.isFinite(subtotal)) {
+        throw new Error("INVALID_ORDER_ITEM_PRICE");
+       }
+
+       return {
+        productId: new mongoose.Types.ObjectId(productId),
+        quantity,
+        price,
+        subtotal,
+       };
+      });
+
+      /*
+       * Load products from the same store.
+       * The client cannot submit product snapshots or currency
+       * to override the values maintained by the server.
+       */
+      const products = await Product.find({
+       _id: { $in: normalizedItems.map((item: any) => item.productId) },
+       storeId: currentOrder.storeId,
+      }).session(session);
+
+      const productMap = new Map(products.map((product) => [String(product._id), product]));
+
+      for (const item of normalizedItems) {
+       if (!productMap.has(String(item.productId))) {
         throw new Error("PRODUCT_NOT_FOUND");
        }
+      }
 
-       const quantity = Number(item.quantity);
+      /*
+       * Reconcile inventory only when the order is CONFIRMED.
+       * Existing order quantities have already been deducted.
+       */
+      if (statusCode === "CONFIRMED") {
+       const oldQuantities = new Map<string, number>();
+       const newQuantities = new Map<string, number>();
 
-       if (!Number.isInteger(quantity) || quantity < 1) {
-        throw new Error("INVALID_PRODUCT_QUANTITY");
+       for (const item of oldItems) {
+        const productId = String(item.productId);
+
+        oldQuantities.set(productId, (oldQuantities.get(productId) || 0) + Number(item.quantity));
        }
 
-       if (product.quantity < quantity) {
-        throw new Error(`INSUFFICIENT_STOCK:${product.name}:${product.quantity}`);
+       for (const item of normalizedItems) {
+        const productId = String(item.productId);
+
+        newQuantities.set(productId, (newQuantities.get(productId) || 0) + item.quantity);
        }
 
-       const quantityBefore = product.quantity;
-       const quantityAfter = quantityBefore - quantity;
+       const affectedProductIds = new Set(Array.from(oldQuantities.keys()).concat(Array.from(newQuantities.keys())));
 
-       product.quantity = quantityAfter;
+       const affectedProductIdsArray = Array.from(affectedProductIds);
 
-       if (quantityAfter === 0) {
-        product.status = "OUT_OF_STOCK";
+       for (let i = 0; i < affectedProductIdsArray.length; i++) {
+        const productId = affectedProductIdsArray[i];
+
+        const quantityBefore = oldQuantities.get(productId) || 0;
+        const quantityAfter = newQuantities.get(productId) || 0;
+        const difference = quantityAfter - quantityBefore;
+
+        if (difference === 0) {
+         continue;
+        }
+
+        const product = await Product.findOne({
+         _id: productId,
+         storeId: currentOrder.storeId,
+        }).session(session);
+
+        if (!product) {
+         throw new Error("PRODUCT_NOT_FOUND");
+        }
+
+        product.quantity = product.quantity - difference;
+
+        if (product.quantity < 0) {
+         throw new Error("INSUFFICIENT_STOCK");
+        }
+
+        await product.save({ session });
+
+        await Inventory.create(
+         [
+          {
+           storeId: currentOrder.storeId,
+           productId: product._id,
+           type: difference > 0 ? "OUT" : "IN",
+           quantity: Math.abs(difference),
+          },
+         ],
+         { session },
+        );
+       }
+      }
+
+      /*
+       * Replace old order items with validated items.
+       * Product details and currency are generated on the server.
+       */
+      const itemDocuments = normalizedItems.map((item: any) => {
+       const product = productMap.get(String(item.productId))!;
+
+       return {
+        orderId: currentOrder._id,
+        productId: product._id,
+        productSnapshot: {
+         name: product.name,
+         sku: product.sku,
+         slug: product.slug,
+         image: product.images?.[0] || "",
+        },
+        quantity: item.quantity,
+        price: item.price,
+        subtotal: item.subtotal,
+        affiliateCommissionRate: null,
+        currency: currentOrder.currency,
+       };
+      });
+
+      await OrderItem.deleteMany({ orderId: currentOrder._id }, { session });
+
+      await OrderItem.insertMany(itemDocuments, { session });
+
+      /*
+       * Recalculate all totals on the server.
+       */
+      currentOrder.subtotal = Math.round(normalizedItems.reduce((sum: any, item: any) => sum + item.subtotal, 0) * 100) / 100;
+
+      const shippingFee = Number(currentOrder.shippingFee);
+      const discount = Number(currentOrder.discount);
+
+      if (!Number.isFinite(shippingFee) || shippingFee < 0 || !Number.isFinite(discount) || discount < 0) {
+       throw new Error("INVALID_ORDER_TOTAL");
+      }
+
+      currentOrder.total = Math.round(Math.max(0, currentOrder.subtotal + shippingFee - discount) * 100) / 100;
+
+      await currentOrder.save({ session });
+     }
+
+     /*
+      * UPDATE GENERAL ORDER INFORMATION
+      */
+     const hasOrderFieldUpdate = allowedOrderFields.some((field) => Object.prototype.hasOwnProperty.call(body, field));
+
+     if (hasOrderFieldUpdate) {
+      if (Object.prototype.hasOwnProperty.call(body, "customerSnapshot")) {
+       const value = body.customerSnapshot;
+
+       if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("INVALID_CUSTOMER_SNAPSHOT");
        }
 
-       await product.save({ session });
+       currentOrder.customerSnapshot = {
+        ...currentOrder.customerSnapshot,
+        ...value,
+       };
+      }
 
-       await Inventory.create(
+      if (Object.prototype.hasOwnProperty.call(body, "shippingAddress")) {
+       const value = body.shippingAddress;
+
+       if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("INVALID_SHIPPING_ADDRESS");
+       }
+
+       currentOrder.shippingAddress = {
+        ...currentOrder.shippingAddress,
+        ...value,
+       };
+      }
+
+      if (Object.prototype.hasOwnProperty.call(body, "shippingFee")) {
+       const value = Number(body.shippingFee);
+
+       if (!Number.isFinite(value) || value < 0) {
+        throw new Error("INVALID_SHIPPING_FEE");
+       }
+
+       currentOrder.shippingFee = value;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(body, "discount")) {
+       const value = Number(body.discount);
+
+       if (!Number.isFinite(value) || value < 0) {
+        throw new Error("INVALID_DISCOUNT");
+       }
+
+       currentOrder.discount = value;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(body, "note")) {
+       if (typeof body.note !== "string") {
+        throw new Error("INVALID_ORDER_NOTE");
+       }
+
+       currentOrder.note = body.note.trim();
+      }
+
+      if (Object.prototype.hasOwnProperty.call(body, "shippingMethod")) {
+       if (typeof body.shippingMethod !== "string") {
+        throw new Error("INVALID_SHIPPING_METHOD");
+       }
+
+       currentOrder.shippingMethod = body.shippingMethod.trim();
+      }
+
+      if (Object.prototype.hasOwnProperty.call(body, "trackingNumber")) {
+       if (typeof body.trackingNumber !== "string") {
+        throw new Error("INVALID_TRACKING_NUMBER");
+       }
+
+       currentOrder.trackingNumber = body.trackingNumber.trim();
+      }
+
+      const subtotal = Number(currentOrder.subtotal);
+      const shippingFee = Number(currentOrder.shippingFee);
+      const discount = Number(currentOrder.discount);
+
+      if (!Number.isFinite(subtotal) || subtotal < 0 || !Number.isFinite(shippingFee) || shippingFee < 0 || !Number.isFinite(discount) || discount < 0) {
+       throw new Error("INVALID_ORDER_TOTAL");
+      }
+
+      currentOrder.total = Math.max(0, subtotal + shippingFee - discount);
+
+      await currentOrder.save({ session });
+     }
+
+     /*
+      * ORDER STATUS UPDATE
+      * statusId is optional for general order updates.
+      */
+     if (body.statusId !== undefined) {
+      const requestedStatusId = typeof body.statusId === "string" ? body.statusId : "";
+
+      if (!requestedStatusId || !mongoose.Types.ObjectId.isValid(requestedStatusId)) {
+       throw new Error("INVALID_STATUS_ID");
+      }
+
+      const previousStatusId = getId(currentOrder.statusId);
+
+      if (previousStatusId !== requestedStatusId) {
+       const [previousStatus, newStatus] = await Promise.all([
+        OrderStatus.findById(previousStatusId).session(session),
+        OrderStatus.findOne({
+         _id: requestedStatusId,
+         isActive: true,
+        }).session(session),
+       ]);
+
+       if (!previousStatus) {
+        throw new Error("CURRENT_STATUS_NOT_FOUND");
+       }
+
+       if (!newStatus) {
+        throw new Error("STATUS_NOT_FOUND");
+       }
+
+       const previousCode = String(previousStatus.code || "").toUpperCase();
+       const newCode = String(newStatus.code || "").toUpperCase();
+
+       /*
+        * Deduct stock when the order first reaches CONFIRMED.
+        */
+       if (previousCode !== "CONFIRMED" && newCode === "CONFIRMED") {
+        const orderItems = await OrderItem.find({
+         orderId: currentOrder._id,
+        })
+         .session(session)
+         .lean();
+
+        for (const item of orderItems) {
+         const product = await Product.findOne({
+          _id: item.productId,
+          storeId: currentOrder.storeId,
+         }).session(session);
+
+         if (!product) {
+          throw new Error("PRODUCT_NOT_FOUND");
+         }
+
+         const quantity = Number(item.quantity);
+
+         if (!Number.isInteger(quantity) || quantity < 1) {
+          throw new Error("INVALID_PRODUCT_QUANTITY");
+         }
+
+         if (product.quantity < quantity) {
+          throw new Error(`INSUFFICIENT_STOCK:${product.name}:${product.quantity}`);
+         }
+
+         const quantityBefore = product.quantity;
+         const quantityAfter = quantityBefore - quantity;
+
+         product.quantity = quantityAfter;
+
+         if (quantityAfter === 0) {
+          product.status = "OUT_OF_STOCK";
+         }
+
+         await product.save({ session });
+
+         await Inventory.create(
+          [
+           {
+            storeId: currentOrder.storeId,
+            productId: product._id,
+            type: "OUT",
+            quantity,
+            quantityBefore,
+            quantityAfter,
+            note: `Stock deducted for order ${currentOrder.orderNumber}.`,
+            reference: currentOrder.orderNumber,
+            createdBy: user.id,
+           },
+          ],
+          { session },
+         );
+        }
+       }
+
+       currentOrder.statusId = newStatus._id;
+       await currentOrder.save({ session });
+
+       /*
+        * Create commissions when the order reaches DELIVERED.
+        */
+       if (newCode === "DELIVERED" && previousCode !== "DELIVERED") {
+        if (currentOrder.affiliateId && currentOrder.affiliateStoreId) {
+         const affiliateStore = await AffiliateStore.findOne({
+          _id: currentOrder.affiliateStoreId,
+          affiliateId: currentOrder.affiliateId,
+          storeId: currentOrder.storeId,
+         }).session(session);
+
+         if (!affiliateStore) {
+          throw new Error("AFFILIATE_STORE_NOT_FOUND");
+         }
+
+         const orderItems = await OrderItem.find({
+          orderId: currentOrder._id,
+         })
+          .session(session)
+          .lean();
+
+         const productIds = Array.from(new Set(orderItems.map((item) => String(item.productId))));
+
+         const productRates = await AffiliateProductRate.find({
+          affiliateId: currentOrder.affiliateId,
+          storeId: currentOrder.storeId,
+          productId: { $in: productIds },
+          status: "ACTIVE",
+         })
+          .session(session)
+          .lean();
+
+         const rateMap = new Map(productRates.map((rate) => [String(rate.productId), rate.commissionRate]));
+
+         const commissionDocuments = orderItems.map((item) => {
+          const commissionRate = rateMap.get(String(item.productId)) ?? affiliateStore.commissionRate;
+
+          const commissionBase = Number(item.subtotal);
+          const quantity = Number(item.quantity);
+
+          const amount = Math.round(((commissionBase * commissionRate) / 100) * 100) / 100;
+
+          if (
+           !Number.isFinite(commissionRate) ||
+           commissionRate < 0 ||
+           commissionRate > 100 ||
+           !Number.isFinite(commissionBase) ||
+           commissionBase < 0 ||
+           !Number.isInteger(quantity) ||
+           quantity < 1
+          ) {
+           throw new Error("INVALID_AFFILIATE_COMMISSION_DATA");
+          }
+
+          return {
+           affiliateId: currentOrder.affiliateId,
+           affiliateStoreId: currentOrder.affiliateStoreId,
+           storeId: currentOrder.storeId,
+           orderId: currentOrder._id,
+           orderItemId: item._id,
+           productId: item.productId,
+           productName: item.productSnapshot?.name || "",
+           quantity,
+           orderNumber: currentOrder.orderNumber,
+           commissionRate,
+           commissionBase,
+           amount,
+           currency: item.currency,
+           status: "PENDING",
+           note: "",
+          };
+         });
+
+         if (commissionDocuments.length > 0) {
+          await AffiliateCommission.insertMany(commissionDocuments, {
+           session,
+           ordered: true,
+          });
+         }
+        }
+       }
+
+       /*
+        * Record history only when status actually changes.
+        * Keep this inside the block where both status variables exist.
+        */
+       await OrderStatusHistory.create(
         [
          {
+          orderId: currentOrder._id,
           storeId: currentOrder.storeId,
-          productId: product._id,
-          type: "OUT",
-          quantity,
-          quantityBefore,
-          quantityAfter,
-          note: `Stock deducted for order ${currentOrder.orderNumber}.`,
-          reference: currentOrder.orderNumber,
-          createdBy: user.id,
+          fromStatusId: previousStatus._id,
+          fromStatusName: previousStatus.name,
+          toStatusId: newStatus._id,
+          toStatusName: newStatus.name,
+          changedBy: user.id,
+          note,
          },
         ],
         { session },
        );
       }
      }
-
-     currentOrder.statusId = newStatus._id;
-
-     await currentOrder.save({ session });
-     /*
-
-* Create affiliate commissions when an order reaches DELIVERED.
-* Each order item receives its own commission record.
-  */
-     if (newCode === "DELIVERED" && previousCode !== "DELIVERED") {
-      if (currentOrder.affiliateId && currentOrder.affiliateStoreId) {
-       const affiliateStore = await AffiliateStore.findOne({
-        _id: currentOrder.affiliateStoreId,
-        affiliateId: currentOrder.affiliateId,
-        storeId: currentOrder.storeId,
-       }).session(session);
-
-       if (!affiliateStore) {
-        throw new Error("AFFILIATE_STORE_NOT_FOUND");
-       }
-
-       const orderItems = await OrderItem.find({
-        orderId: currentOrder._id,
-       })
-        .session(session)
-        .lean();
-
-       const productIds: string[] = [];
-
-       orderItems.forEach((item) => {
-        const productId = String(item.productId);
-
-        if (productIds.indexOf(productId) === -1) {
-         productIds.push(productId);
-        }
-       });
-
-       const productRates = await AffiliateProductRate.find({
-        affiliateId: currentOrder.affiliateId,
-        storeId: currentOrder.storeId,
-        productId: { $in: productIds },
-        status: "ACTIVE",
-       })
-        .session(session)
-        .lean();
-
-       const rateMap = new Map(productRates.map((rate) => [String(rate.productId), rate.commissionRate]));
-
-       const commissionDocuments = orderItems.map((item) => {
-        const productId = String(item.productId);
-
-        const commissionRate = rateMap.get(productId) ?? affiliateStore.commissionRate;
-
-        const commissionBase = Number(item.subtotal);
-        const quantity = Number(item.quantity);
-        const amount = Math.round(((commissionBase * commissionRate) / 100) * 100) / 100;
-
-        if (
-         !Number.isFinite(commissionRate) ||
-         commissionRate < 0 ||
-         commissionRate > 100 ||
-         !Number.isFinite(commissionBase) ||
-         commissionBase < 0 ||
-         !Number.isInteger(quantity) ||
-         quantity < 1
-        ) {
-         throw new Error("INVALID_AFFILIATE_COMMISSION_DATA");
-        }
-
-        return {
-         affiliateId: currentOrder.affiliateId,
-         affiliateStoreId: currentOrder.affiliateStoreId,
-         storeId: currentOrder.storeId,
-         orderId: currentOrder._id,
-         orderItemId: item._id,
-         productId: item.productId,
-         productName: item.productSnapshot?.name || "",
-         quantity,
-         orderNumber: currentOrder.orderNumber,
-         commissionRate,
-         commissionBase,
-         amount,
-         currency: item.currency,
-         status: "PENDING",
-         note: "",
-        };
-       });
-
-       if (commissionDocuments.length > 0) {
-        await AffiliateCommission.insertMany(commissionDocuments, {
-         session,
-         ordered: true,
-        });
-       }
-      }
-     }
-
-     await OrderStatusHistory.create(
-      [
-       {
-        orderId: currentOrder._id,
-        storeId: currentOrder.storeId,
-        fromStatusId: previousStatus._id,
-        fromStatusName: previousStatus.name,
-        toStatusId: newStatus._id,
-        toStatusName: newStatus.name,
-        changedBy: user.id,
-        note,
-       },
-      ],
-      { session },
-     );
 
      updatedOrderId = currentOrder._id.toString();
     });
@@ -431,16 +724,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
    });
   }
 
-  res.setHeader("Allow", ["GET", "PATCH"]);
   if (req.method === "DELETE") {
-   const { id } = req.query;
-
-   if (typeof id !== "string" || !mongoose.Types.ObjectId.isValid(id)) {
-    return res.status(400).json({
-     success: false,
-     message: "Invalid order ID.",
-    });
-   }
+   const user = await requirePermission(req, "orders.delete");
 
    const order = await Order.findOne({
     _id: id,
@@ -454,6 +739,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     });
    }
 
+   if (user.role !== "SUPER_ADMIN" && getId(order.storeId) !== getId(user.storeId)) {
+    return res.status(403).json({
+     success: false,
+     message: "You do not have access to this order.",
+    });
+   }
+
    order.isDeleted = true;
    order.deletedAt = new Date();
 
@@ -464,6 +756,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     message: "Order moved to deleted orders.",
    });
   }
+
+  res.setHeader("Allow", ["GET", "PATCH", "DELETE"]);
+
   return res.status(405).json({
    success: false,
    message: "Method not allowed.",
@@ -561,6 +856,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
    return res.status(400).json({
     success: false,
     message: "The current order status was not found.",
+   });
+  }
+  if (message === "DELIVERED_ORDER_ITEMS_LOCKED") {
+   return res.status(409).json({
+    success: false,
+    message: "Không thể sửa sản phẩm hoặc số lượng của đơn đã giao và đã phát sinh hoa hồng.",
+   });
+  }
+  if (
+   message === "INVALID_CUSTOMER_SNAPSHOT" ||
+   message === "INVALID_SHIPPING_ADDRESS" ||
+   message === "INVALID_SHIPPING_FEE" ||
+   message === "INVALID_DISCOUNT" ||
+   message === "INVALID_ORDER_TOTAL" ||
+   message === "INVALID_ORDER_NOTE" ||
+   message === "INVALID_SHIPPING_METHOD" ||
+   message === "INVALID_TRACKING_NUMBER"
+  ) {
+   return res.status(400).json({
+    success: false,
+    message: "Thông tin cập nhật đơn hàng không hợp lệ.",
    });
   }
   return res.status(500).json({

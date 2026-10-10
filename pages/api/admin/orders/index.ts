@@ -11,7 +11,8 @@ import { OrderStatus } from "~/models/OrderStatus";
 import { Product } from "~/models/Product";
 import { Customer } from "~/models/Customer";
 import { Store } from "~/models/Store";
-
+import { AffiliateCommission } from "~/models/AffiliateCommission";
+import { AffiliateStore } from "~/models/AffiliateStore";
 interface ApiResponse {
  success: boolean;
  message?: string;
@@ -81,9 +82,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
    const dateTo = typeof req.query.dateTo === "string" ? req.query.dateTo : "";
 
+   const deletedFilter = typeof req.query.deleted === "string" ? req.query.deleted : "active";
+
+   if (!["active", "deleted", "all"].includes(deletedFilter)) {
+    return res.status(400).json({
+     success: false,
+     message: "Invalid deleted filter. Use active, deleted, or all.",
+    });
+   }
+
    const filter: Record<string, unknown> = {
     storeId: new mongoose.Types.ObjectId(storeId),
    };
+
+   if (deletedFilter === "active") {
+    filter.isDeleted = { $ne: true };
+   } else if (deletedFilter === "deleted") {
+    filter.isDeleted = true;
+   }
+
+   if (deletedFilter === "deleted") {
+    filter.isDeleted = true;
+   } else if (deletedFilter === "all") {
+    // Include both active and soft-deleted orders.
+   } else {
+    // Default: show active orders only.
+    filter.isDeleted = { $ne: true };
+   }
 
    if (statusId && mongoose.Types.ObjectId.isValid(statusId)) {
     filter.statusId = new mongoose.Types.ObjectId(statusId);
@@ -203,6 +228,72 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
    ]);
 
    /*
+    * Load order items and affiliate data for the current page.
+    */
+
+   const orderIds = orders.map((order) => order._id);
+
+   const affiliateIds = Array.from(new Set(orders.map((order) => (order.affiliateId ? order.affiliateId.toString() : null)).filter(Boolean)));
+
+   const affiliateStoreIds = Array.from(new Set(orders.map((order) => (order.affiliateStoreId ? order.affiliateStoreId.toString() : null)).filter(Boolean)));
+
+   const [orderItems, commissions, affiliateStores] = await Promise.all([
+    OrderItem.find({
+     orderId: { $in: orderIds },
+    }).lean(),
+
+    AffiliateCommission.find({
+     orderId: { $in: orderIds },
+    }).lean(),
+
+    AffiliateStore.find({
+     _id: { $in: affiliateStoreIds },
+    })
+     .populate("affiliateId", "name email")
+     .populate("storeId", "name slug")
+     .lean(),
+   ]);
+
+   const itemsByOrder = new Map<string, typeof orderItems>();
+
+   for (const item of orderItems) {
+    const key = item.orderId.toString();
+    const existing = itemsByOrder.get(key) || [];
+
+    existing.push(item);
+    itemsByOrder.set(key, existing);
+   }
+
+   const commissionsByOrder = new Map<string, typeof commissions>();
+
+   for (const commission of commissions) {
+    const key = commission.orderId.toString();
+    const existing = commissionsByOrder.get(key) || [];
+
+    existing.push(commission);
+    commissionsByOrder.set(key, existing);
+   }
+
+   const affiliateStoreById = new Map(affiliateStores.map((affiliateStore) => [affiliateStore._id.toString(), affiliateStore]));
+
+   const affiliateOrders = orders.map((order) => {
+    const orderId = order._id.toString();
+    const items = itemsByOrder.get(orderId) || [];
+    const orderCommissions = commissionsByOrder.get(orderId) || [];
+
+    const affiliateStoreId = order.affiliateStoreId?.toString() || "";
+    const affiliateStore = affiliateStoreById.get(affiliateStoreId);
+
+    return {
+     ...order,
+     items,
+     affiliateStore: affiliateStore || null,
+     affiliateCommissions: orderCommissions,
+     affiliateCommissionTotal: orderCommissions.reduce((sum, commission) => sum + Number(commission.amount || 0), 0),
+    };
+   });
+
+   /*
     * Build status counts.
     */
 
@@ -210,6 +301,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     {
      $match: {
       storeId: new mongoose.Types.ObjectId(storeId),
+      ...(deletedFilter === "active" ? { isDeleted: { $ne: true } } : deletedFilter === "deleted" ? { isDeleted: true } : {}),
      },
     },
     {
@@ -241,7 +333,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
    return res.status(200).json({
     success: true,
-    orders,
+    orders: affiliateOrders,
     pagination: {
      page,
      limit,
