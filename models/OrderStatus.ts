@@ -2,13 +2,6 @@ import mongoose, { Schema, models } from "mongoose";
 
 const OrderStatusSchema = new Schema(
  {
-  storeId: {
-   type: Schema.Types.ObjectId,
-   ref: "Store",
-   required: true,
-   index: true,
-  },
-
   name: {
    type: String,
    required: true,
@@ -43,6 +36,7 @@ const OrderStatusSchema = new Schema(
   sortOrder: {
    type: Number,
    default: 0,
+   min: 0,
   },
 
   isActive: {
@@ -72,11 +66,10 @@ const OrderStatusSchema = new Schema(
  },
 );
 
-OrderStatusSchema.index({ storeId: 1, code: 1 }, { unique: true });
+// Status codes are unique across the entire platform.
+OrderStatusSchema.index({ code: 1 }, { unique: true });
 
-OrderStatusSchema.index({
- storeId: 1,
- sortOrder: 1,
-});
+// Used when sorting the global status list.
+OrderStatusSchema.index({ sortOrder: 1 });
 
 export const OrderStatus = models.OrderStatus || mongoose.model("OrderStatus", OrderStatusSchema);

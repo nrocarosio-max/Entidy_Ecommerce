@@ -8,7 +8,7 @@ import LowStockProducts from "~/components/admin/dashboard/LowStockProducts";
 import OrderStatusOverview from "~/components/admin/dashboard/OrderStatusOverview";
 import RecentOrders from "~/components/admin/dashboard/RecentOrders";
 import SalesOverview from "~/components/admin/dashboard/SalesOverview";
-
+import AffiliateOverview from "~/components/admin/dashboard/AffiliateOverview";
 interface Store {
  _id: string;
  name: string;
@@ -33,7 +33,14 @@ interface DashboardData {
   pendingOrders: number;
   lowStockProducts: number;
  };
-
+ affiliateOverview?: {
+  activeAffiliates: number;
+  referredOrders: number;
+  totalCommission: number;
+  totalPaid: number;
+  remainingCommission: number;
+  currency: "VND";
+ };
  orderStatus: {
   PENDING: number;
   CONFIRMED: number;
@@ -261,7 +268,7 @@ export default function AdminDashboard() {
     {error && <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{error}</div>}
 
     <DashboardStats stats={dashboard.stats} />
-
+    {userRole === "SUPER_ADMIN" && dashboard.affiliateOverview && <AffiliateOverview data={dashboard.affiliateOverview} />}
     <div className="mt-6 grid gap-6 xl:grid-cols-[1.5fr_1fr]">
      <SalesOverview data={dashboard.salesOverview} />
 

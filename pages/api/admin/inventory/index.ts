@@ -285,15 +285,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     */
    product.quantity = quantityAfter;
 
-   /*
-    * Automatically update product status.
-    */
-   if (quantityAfter <= 0) {
-    product.status = "OUT_OF_STOCK";
-   } else if (product.status === "OUT_OF_STOCK") {
-    product.status = "ACTIVE";
-   }
-
    await product.save();
 
    /*

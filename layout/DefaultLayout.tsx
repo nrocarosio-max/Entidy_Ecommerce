@@ -15,7 +15,7 @@ const DefaultLayout = ({ children }: PropsWithChildren) => {
     <meta name="description" content="Official Rolex Website - Swiss Luxury Watches"></meta>
    </Head>
    <Header />
-   <main className="w-full min-h-screen">{children}</main>
+   <main className="w-full min-h-screen mt-[68px]">{children}</main>
    <Footer />
   </>
  );

@@ -41,11 +41,32 @@ interface OrderItem {
  createdAt: string;
 }
 
+interface OrderStatusOption {
+ _id: string;
+ name: string;
+ code: string;
+ description?: string;
+ color?: string;
+ icon?: string;
+ sortOrder?: number;
+ isActive: boolean;
+ isInitial?: boolean;
+ isFinal?: boolean;
+ nextStatusIds?: Array<string | OrderStatusOption>;
+}
+
+interface HistoryStatus {
+ _id: string;
+ name: string;
+ code: string;
+ color?: string;
+}
+
 interface StatusHistory {
  _id: string;
  orderId: string;
- fromStatus: string;
- toStatus: string;
+ previousStatusId: string | HistoryStatus | null;
+ newStatusId: string | HistoryStatus | null;
  changedBy: {
   _id: string;
   name: string;
@@ -60,13 +81,11 @@ interface Order {
  storeId: string | Store;
  customerId: string | Customer;
  orderNumber: string;
-
  customerSnapshot: {
   name: string;
   phone: string;
   email: string;
  };
-
  shippingAddress: {
   province: string;
   district: string;
@@ -74,23 +93,17 @@ interface Order {
   address: string;
   postalCode: string;
  };
-
  subtotal: number;
  shippingFee: number;
  discount: number;
  total: number;
  currency: string;
-
  paymentMethod: string;
  paymentStatus: string;
-
- status: string;
-
+ statusId: string | OrderStatusOption;
  note: string;
-
  shippingMethod: string;
  trackingNumber: string;
-
  createdBy:
   | string
   | {
@@ -99,60 +112,46 @@ interface Order {
      email: string;
     }
   | null;
-
  createdAt: string;
  updatedAt: string;
 }
 
 interface OrderResponse {
+ success: boolean;
+ message?: string;
  order: Order;
  items: OrderItem[];
- statusHistory: StatusHistory[];
+ history: StatusHistory[];
+ paymentHistory?: unknown[];
 }
 
-const statusOptions = [
- {
-  value: "PENDING",
-  label: "Pending",
- },
- {
-  value: "CONFIRMED",
-  label: "Confirmed",
- },
- {
-  value: "PROCESSING",
-  label: "Processing",
- },
- {
-  value: "SHIPPED",
-  label: "Shipped",
- },
- {
-  value: "DELIVERED",
-  label: "Delivered",
- },
- {
-  value: "CANCELLED",
-  label: "Cancelled",
- },
- {
-  value: "RETURNED",
-  label: "Returned",
- },
-];
+function getStatusObject(value: Order["statusId"]): OrderStatusOption | null {
+ return value && typeof value === "object" ? value : null;
+}
 
-const allowedTransitions: Record<string, string[]> = {
- PENDING: ["CONFIRMED", "CANCELLED"],
- CONFIRMED: ["PROCESSING", "CANCELLED"],
- PROCESSING: ["SHIPPED", "CANCELLED"],
- SHIPPED: ["DELIVERED", "RETURNED"],
- DELIVERED: ["RETURNED"],
- CANCELLED: [],
- RETURNED: [],
-};
+function getStatusId(value: Order["statusId"]): string {
+ if (value && typeof value === "object") {
+  return value._id;
+ }
+
+ return typeof value === "string" ? value : "";
+}
+
+function getStatusCode(value: Order["statusId"]): string {
+ return getStatusObject(value)?.code || "UNKNOWN";
+}
+
+function getHistoryStatusLabel(value: StatusHistory["previousStatusId"] | StatusHistory["newStatusId"]): string {
+ if (!value) return "Unknown";
+
+ if (typeof value === "string") return value;
+
+ return value.name || value.code || "Unknown";
+}
 
 function getStatusClass(status: string) {
- switch (status) {
+ switch (status.toUpperCase()) {
+  case "NEW":
   case "PENDING":
    return "bg-yellow-100 text-yellow-700";
 
@@ -202,81 +201,93 @@ export default function OrderDetailPage() {
  const [statusHistory, setStatusHistory] = useState<StatusHistory[]>([]);
 
  const [selectedStatus, setSelectedStatus] = useState("");
-
  const [shippingMethod, setShippingMethod] = useState("");
-
  const [trackingNumber, setTrackingNumber] = useState("");
-
  const [note, setNote] = useState("");
 
  const [loading, setLoading] = useState(true);
  const [saving, setSaving] = useState(false);
-
  const [error, setError] = useState("");
  const [success, setSuccess] = useState("");
 
- /*
-  * Load order
-  */
- useEffect(() => {
-  if (status !== "authenticated") return;
+ const loadOrder = async () => {
   if (!orderId) return;
 
-  const loadOrder = async () => {
+  const response = await fetch(`/api/admin/orders/${orderId}`);
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok) {
+   throw new Error(data?.message || "Failed to load order.");
+  }
+
+  const result = data as OrderResponse;
+
+  setOrder(result.order);
+  setItems(result.items || []);
+  setStatusHistory(result.history || []);
+
+  setSelectedStatus(getStatusId(result.order.statusId));
+  setShippingMethod(result.order.shippingMethod || "");
+  setTrackingNumber(result.order.trackingNumber || "");
+  setNote(result.order.note || "");
+ };
+
+ useEffect(() => {
+  if (status !== "authenticated" || !orderId) return;
+
+  let cancelled = false;
+
+  const initialLoad = async () => {
    try {
     setLoading(true);
     setError("");
 
     const response = await fetch(`/api/admin/orders/${orderId}`);
-
     const data = await response.json().catch(() => null);
 
     if (!response.ok) {
      throw new Error(data?.message || "Failed to load order.");
     }
 
-    const result: OrderResponse = data;
+    if (cancelled) return;
+
+    const result = data as OrderResponse;
 
     setOrder(result.order);
     setItems(result.items || []);
-    setStatusHistory(result.statusHistory || []);
+    setStatusHistory(result.history || []);
 
-    setSelectedStatus(result.order.status);
+    setSelectedStatus(getStatusId(result.order.statusId));
     setShippingMethod(result.order.shippingMethod || "");
     setTrackingNumber(result.order.trackingNumber || "");
     setNote(result.order.note || "");
    } catch (err) {
-    setError(err instanceof Error ? err.message : "Failed to load order.");
+    if (!cancelled) {
+     setError(err instanceof Error ? err.message : "Failed to load order.");
+    }
    } finally {
-    setLoading(false);
+    if (!cancelled) setLoading(false);
    }
   };
 
-  loadOrder();
+  void initialLoad();
+
+  return () => {
+   cancelled = true;
+  };
  }, [status, orderId]);
 
- /*
-  * Save order
-  */
  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
   event.preventDefault();
 
   if (!order) return;
 
-  if (selectedStatus !== order.status) {
-   const allowed = allowedTransitions[order.status] || [];
-
-   if (!allowed.includes(selectedStatus)) {
-    setError(`Invalid status transition: ${order.status} → ${selectedStatus}`);
-
-    return;
-   }
-  }
-
   try {
    setSaving(true);
    setError("");
    setSuccess("");
+
+   const currentStatusId = getStatusId(order.statusId);
 
    const response = await fetch(`/api/admin/orders/${order._id}`, {
     method: "PATCH",
@@ -284,9 +295,7 @@ export default function OrderDetailPage() {
      "Content-Type": "application/json",
     },
     body: JSON.stringify({
-     status: selectedStatus,
-     shippingMethod: shippingMethod.trim(),
-     trackingNumber: trackingNumber.trim(),
+     statusId: selectedStatus,
      note: note.trim(),
     }),
    });
@@ -297,29 +306,10 @@ export default function OrderDetailPage() {
     throw new Error(data?.message || "Failed to update order.");
    }
 
-   const updatedOrder: Order = data.order || data;
+   // Reload the full order and populated status history.
+   await loadOrder();
 
-   setOrder(updatedOrder);
-
-   setSelectedStatus(updatedOrder.status);
-   setShippingMethod(updatedOrder.shippingMethod || "");
-   setTrackingNumber(updatedOrder.trackingNumber || "");
-   setNote(updatedOrder.note || "");
-
-   /*
-    * Reload full detail to get latest history
-    */
-   const reloadResponse = await fetch(`/api/admin/orders/${order._id}`);
-
-   if (reloadResponse.ok) {
-    const reloadData: OrderResponse = await reloadResponse.json();
-
-    setOrder(reloadData.order);
-    setItems(reloadData.items || []);
-    setStatusHistory(reloadData.statusHistory || []);
-   }
-
-   setSuccess("Order updated successfully.");
+   setSuccess(selectedStatus === currentStatusId ? "Order information refreshed successfully." : "Order status updated successfully.");
   } catch (err) {
    setError(err instanceof Error ? err.message : "Failed to update order.");
   } finally {
@@ -347,7 +337,14 @@ export default function OrderDetailPage() {
 
  const store = typeof order.storeId === "object" ? order.storeId : null;
 
- const nextStatuses = allowedTransitions[order.status] || [];
+ const currentStatus = getStatusObject(order.statusId);
+ const currentStatusCode = getStatusCode(order.statusId);
+ const currentStatusId = getStatusId(order.statusId);
+
+ const nextStatuses = (currentStatus?.nextStatusIds || [])
+  .map((statusOption) => (typeof statusOption === "string" ? null : statusOption))
+  .filter((statusOption): statusOption is OrderStatusOption => Boolean(statusOption && statusOption.isActive))
+  .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
 
  return (
   <div className="min-h-screen bg-gray-100 p-4 md:p-6">
@@ -364,7 +361,9 @@ export default function OrderDetailPage() {
       <div className="flex flex-wrap items-center gap-3">
        <h1 className="text-2xl font-bold text-gray-900">{order.orderNumber}</h1>
 
-       <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${getStatusClass(order.status)}`}>{formatStatus(order.status)}</span>
+       <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${getStatusClass(currentStatusCode)}`}>
+        {formatStatus(currentStatus?.name || currentStatusCode)}
+       </span>
       </div>
 
       <p className="text-sm text-gray-500">Created {new Date(order.createdAt).toLocaleString("vi-VN")}</p>
@@ -373,7 +372,6 @@ export default function OrderDetailPage() {
 
     <div className="text-left lg:text-right">
      <p className="text-sm text-gray-500">Order Total</p>
-
      <p className="text-2xl font-bold text-gray-900">{formatMoney(order.total, order.currency)}</p>
     </div>
    </div>
@@ -390,7 +388,6 @@ export default function OrderDetailPage() {
      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
       <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
        <FaShoppingBag className="text-gray-700" />
-
        <h2 className="font-semibold text-gray-900">Order Items</h2>
       </div>
 
@@ -412,7 +409,6 @@ export default function OrderDetailPage() {
 
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-600">
            <span>Quantity: {item.quantity}</span>
-
            <span>Price: {formatMoney(item.price, item.currency)}</span>
           </div>
          </div>
@@ -429,25 +425,21 @@ export default function OrderDetailPage() {
        <div className="ml-auto max-w-sm space-y-2 text-sm">
         <div className="flex justify-between">
          <span className="text-gray-500">Subtotal</span>
-
          <span className="font-medium text-gray-900">{formatMoney(order.subtotal, order.currency)}</span>
         </div>
 
         <div className="flex justify-between">
          <span className="text-gray-500">Shipping</span>
-
          <span className="font-medium text-gray-900">{formatMoney(order.shippingFee, order.currency)}</span>
         </div>
 
         <div className="flex justify-between">
          <span className="text-gray-500">Discount</span>
-
          <span className="font-medium text-gray-900">-{formatMoney(order.discount, order.currency)}</span>
         </div>
 
         <div className="flex justify-between border-t border-gray-200 pt-3 text-base">
          <span className="font-semibold text-gray-900">Total</span>
-
          <span className="font-bold text-gray-900">{formatMoney(order.total, order.currency)}</span>
         </div>
        </div>
@@ -458,33 +450,28 @@ export default function OrderDetailPage() {
      <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
       <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
        <FaUser className="text-gray-700" />
-
        <h2 className="font-semibold text-gray-900">Customer</h2>
       </div>
 
       <div className="grid gap-5 p-5 md:grid-cols-2">
        <div>
         <p className="text-xs uppercase tracking-wide text-gray-400">Name</p>
-
         <p className="mt-1 font-medium text-gray-900">{order.customerSnapshot?.name || customer?.name || "-"}</p>
        </div>
 
        <div>
         <p className="text-xs uppercase tracking-wide text-gray-400">Phone</p>
-
         <p className="mt-1 font-medium text-gray-900">{order.customerSnapshot?.phone || customer?.phone || "-"}</p>
        </div>
 
        <div>
         <p className="text-xs uppercase tracking-wide text-gray-400">Email</p>
-
         <p className="mt-1 font-medium text-gray-900">{order.customerSnapshot?.email || "-"}</p>
        </div>
 
        {store && (
         <div>
          <p className="text-xs uppercase tracking-wide text-gray-400">Store</p>
-
          <p className="mt-1 font-medium text-gray-900">{store.name}</p>
         </div>
        )}
@@ -495,7 +482,6 @@ export default function OrderDetailPage() {
      <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
       <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
        <FaMapMarkerAlt className="text-gray-700" />
-
        <h2 className="font-semibold text-gray-900">Shipping Address</h2>
       </div>
 
@@ -517,7 +503,6 @@ export default function OrderDetailPage() {
      <form onSubmit={handleSubmit} className="rounded-xl border border-gray-200 bg-white shadow-sm">
       <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
        <FaTruck className="text-gray-700" />
-
        <h2 className="font-semibold text-gray-900">Order Management</h2>
       </div>
 
@@ -529,24 +514,23 @@ export default function OrderDetailPage() {
         <select
          value={selectedStatus}
          onChange={(event) => setSelectedStatus(event.target.value)}
-         disabled={nextStatuses.length === 0}
+         disabled={nextStatuses.length === 0 || saving}
          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-gray-900 disabled:bg-gray-100">
-         <option value={order.status}>{formatStatus(order.status)}</option>
+         <option value={currentStatusId}>{formatStatus(currentStatus?.name || currentStatusCode)}</option>
 
          {nextStatuses.map((nextStatus) => (
-          <option key={nextStatus} value={nextStatus}>
-           {formatStatus(nextStatus)}
+          <option key={nextStatus._id} value={nextStatus._id}>
+           {formatStatus(nextStatus.name)}
           </option>
          ))}
         </select>
 
-        {nextStatuses.length === 0 && <p className="mt-1 text-xs text-gray-400">This order cannot be moved to another status.</p>}
+        {nextStatuses.length === 0 && <p className="mt-1 text-xs text-gray-400">No active next statuses are configured for this status.</p>}
        </div>
 
        {/* Shipping method */}
        <div>
         <label className="mb-1 block text-sm font-medium text-gray-700">Shipping Method</label>
-
         <input
          type="text"
          value={shippingMethod}
@@ -559,7 +543,6 @@ export default function OrderDetailPage() {
        {/* Tracking */}
        <div>
         <label className="mb-1 block text-sm font-medium text-gray-700">Tracking Number</label>
-
         <input
          type="text"
          value={trackingNumber}
@@ -572,7 +555,6 @@ export default function OrderDetailPage() {
        {/* Note */}
        <div>
         <label className="mb-1 block text-sm font-medium text-gray-700">Note</label>
-
         <textarea
          value={note}
          onChange={(event) => setNote(event.target.value)}
@@ -584,10 +566,9 @@ export default function OrderDetailPage() {
 
        <button
         type="submit"
-        disabled={saving}
+        disabled={saving || selectedStatus === ""}
         className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-gray-900 px-5 py-3 text-sm font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50">
         <FaSave />
-
         {saving ? "Saving..." : "Save Changes"}
        </button>
       </div>
@@ -602,13 +583,11 @@ export default function OrderDetailPage() {
       <div className="space-y-4 p-5">
        <div className="flex items-center justify-between">
         <span className="text-sm text-gray-500">Method</span>
-
         <span className="font-medium text-gray-900">{formatStatus(order.paymentMethod)}</span>
        </div>
 
        <div className="flex items-center justify-between">
         <span className="text-sm text-gray-500">Status</span>
-
         <span
          className={`rounded-full px-2.5 py-1 text-xs font-medium ${
           order.paymentStatus === "PAID"
@@ -627,7 +606,6 @@ export default function OrderDetailPage() {
      <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
       <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
        <FaClock className="text-gray-700" />
-
        <h2 className="font-semibold text-gray-900">Status History</h2>
       </div>
 
@@ -636,29 +614,34 @@ export default function OrderDetailPage() {
         <p className="text-sm text-gray-500">No status history.</p>
        ) : (
         <div className="space-y-5">
-         {statusHistory.map((history) => (
-          <div key={history._id} className="relative border-l-2 border-gray-200 pl-5">
-           <div className="absolute -left-[7px] top-1 h-3 w-3 rounded-full bg-gray-900" />
+         {statusHistory.map((history) => {
+          const previousLabel = getHistoryStatusLabel(history.previousStatusId);
+          const newLabel = getHistoryStatusLabel(history.newStatusId);
 
-           <div className="flex flex-wrap items-center gap-2">
-            <span className={`rounded-full px-2 py-1 text-xs font-medium ${getStatusClass(history.fromStatus)}`}>{formatStatus(history.fromStatus)}</span>
+          return (
+           <div key={history._id} className="relative border-l-2 border-gray-200 pl-5">
+            <div className="absolute -left-[7px] top-1 h-3 w-3 rounded-full bg-gray-900" />
 
-            <span className="text-gray-400">→</span>
+            <div className="flex flex-wrap items-center gap-2">
+             <span className={`rounded-full px-2 py-1 text-xs font-medium ${getStatusClass(previousLabel)}`}>{formatStatus(previousLabel)}</span>
 
-            <span className={`rounded-full px-2 py-1 text-xs font-medium ${getStatusClass(history.toStatus)}`}>{formatStatus(history.toStatus)}</span>
+             <span className="text-gray-400">→</span>
+
+             <span className={`rounded-full px-2 py-1 text-xs font-medium ${getStatusClass(newLabel)}`}>{formatStatus(newLabel)}</span>
+            </div>
+
+            <p className="mt-2 text-xs text-gray-500">{new Date(history.createdAt).toLocaleString("vi-VN")}</p>
+
+            {history.changedBy && (
+             <p className="mt-1 text-sm text-gray-700">
+              By: <span className="font-medium">{history.changedBy.name}</span>
+             </p>
+            )}
+
+            {history.note && <p className="mt-1 text-sm text-gray-500">{history.note}</p>}
            </div>
-
-           <p className="mt-2 text-xs text-gray-500">{new Date(history.createdAt).toLocaleString("vi-VN")}</p>
-
-           {history.changedBy && (
-            <p className="mt-1 text-sm text-gray-700">
-             By: <span className="font-medium">{history.changedBy.name}</span>
-            </p>
-           )}
-
-           {history.note && <p className="mt-1 text-sm text-gray-500">{history.note}</p>}
-          </div>
-         ))}
+          );
+         })}
         </div>
        )}
       </div>
@@ -671,7 +654,6 @@ export default function OrderDetailPage() {
 
        <div>
         <p className="text-xs uppercase tracking-wide text-gray-400">Created</p>
-
         <p className="mt-1 text-sm font-medium text-gray-900">{new Date(order.createdAt).toLocaleString("vi-VN")}</p>
        </div>
       </div>
@@ -679,7 +661,6 @@ export default function OrderDetailPage() {
       {order.updatedAt && (
        <div className="mt-4 border-t border-gray-100 pt-4">
         <p className="text-xs uppercase tracking-wide text-gray-400">Last Updated</p>
-
         <p className="mt-1 text-sm font-medium text-gray-900">{new Date(order.updatedAt).toLocaleString("vi-VN")}</p>
        </div>
       )}

@@ -8,6 +8,7 @@ import { requirePermission, getAuthorizedStoreId } from "~/lib/permissions";
 import { Product } from "~/models/Product";
 import { Category } from "~/models/Category";
 import { Brand } from "~/models/Brand";
+import { Store } from "~/models/Store";
 
 type ApiResponse = {
  success: boolean;
@@ -35,6 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
    * GET PRODUCTS
    * ============================================================
    */
+
   if (req.method === "GET") {
    const user = await requirePermission(req, "products.read");
 
@@ -43,6 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
    /*
     * SUPER_ADMIN can select a store.
     */
+
    if (user.role === "SUPER_ADMIN") {
     const queryStoreId = typeof req.query.storeId === "string" ? req.query.storeId : "";
 
@@ -58,6 +61,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     /*
      * Other users can only access their own store.
      */
+
     storeId = await getAuthorizedStoreId(req);
    }
 
@@ -88,6 +92,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     * can be used by admin pages that
     * need inactive products as well.
     */
+
    const includeInactive = req.query.includeInactive === "true";
 
    const filter: Record<string, any> = {
@@ -116,6 +121,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     * - SKU
     * - slug
     */
+
    if (search) {
     const regex = new RegExp(escapeRegex(search), "i");
 
@@ -165,16 +171,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
    * CREATE PRODUCT
    * ============================================================
    */
+
   if (req.method === "POST") {
    const user = await requirePermission(req, "products.create");
 
    let storeId: string | null = null;
 
+   /*
+    * SUPER_ADMIN can select a store.
+    */
+
    if (user.role === "SUPER_ADMIN") {
     storeId = typeof req.body?.storeId === "string" ? req.body.storeId : null;
    } else {
+    /*
+     * Other users can only create products
+     * inside their own store.
+     */
+
     storeId = await getAuthorizedStoreId(req);
    }
+
+   /*
+    * Validate storeId.
+    */
 
    if (!storeId) {
     return res.status(400).json({
@@ -190,6 +210,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     });
    }
 
+   /*
+    * Make sure the store actually exists.
+    */
+
+   const store = await Store.findOne({
+    _id: storeId,
+    isActive: true,
+   }).lean();
+
+   if (!store) {
+    return res.status(400).json({
+     success: false,
+     message: "Store not found or inactive.",
+    });
+   }
+
    const {
     name,
     slug,
@@ -202,6 +238,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     costPrice,
     currency,
     images,
+    tryOnImage,
     videos,
     quantity,
     lowStockThreshold,
@@ -211,8 +248,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
    } = req.body;
 
    /*
-    * Basic validation.
+    * ============================================================
+    * BASIC VALIDATION
+    * ============================================================
     */
+
    if (!name || !String(name).trim()) {
     return res.status(400).json({
      success: false,
@@ -234,7 +274,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     });
    }
 
-   if (price === undefined || price === null || Number(price) < 0) {
+   if (price === undefined || price === null || Number.isNaN(Number(price)) || Number(price) < 0) {
     return res.status(400).json({
      success: false,
      message: "Valid product price is required.",
@@ -249,8 +289,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
    }
 
    /*
-    * Validate category.
+    * ============================================================
+    * NORMALIZE SLUG / SKU
+    * ============================================================
     */
+
+   const normalizedSlug = String(slug).trim().toLowerCase();
+
+   const normalizedSku = String(sku).trim().toUpperCase();
+
+   /*
+    * ============================================================
+    * VALIDATE CATEGORY
+    * ============================================================
+    */
+
    if (categoryId) {
     if (!mongoose.Types.ObjectId.isValid(categoryId)) {
      return res.status(400).json({
@@ -274,8 +327,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
    }
 
    /*
-    * Validate brand.
+    * ============================================================
+    * VALIDATE BRAND
+    * ============================================================
     */
+
    if (brandId) {
     if (!mongoose.Types.ObjectId.isValid(brandId)) {
      return res.status(400).json({
@@ -299,11 +355,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
    }
 
    /*
-    * Check duplicate SKU.
+    * ============================================================
+    * CHECK DUPLICATE SKU
+    * ============================================================
+    *
+    * SKU must be unique inside the same store.
+    *
+    * Store A + ABC-001 -> allowed
+    * Store A + ABC-001 -> duplicate
+    * Store B + ABC-001 -> allowed
     */
+
    const existingSku = await Product.findOne({
     storeId,
-    sku: String(sku).trim().toUpperCase(),
+    sku: normalizedSku,
    }).lean();
 
    if (existingSku) {
@@ -314,11 +379,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
    }
 
    /*
-    * Check duplicate slug.
+    * ============================================================
+    * CHECK DUPLICATE SLUG
+    * ============================================================
+    *
+    * Slug must be unique inside the same store.
+    *
+    * Store A + adidas-shirt -> allowed
+    * Store A + adidas-shirt -> duplicate
+    * Store B + adidas-shirt -> allowed
     */
+
    const existingSlug = await Product.findOne({
     storeId,
-    slug: String(slug).trim(),
+    slug: normalizedSlug,
    }).lean();
 
    if (existingSlug) {
@@ -329,8 +403,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
    }
 
    /*
-    * Normalize images.
+    * ============================================================
+    * NORMALIZE IMAGES
+    * ============================================================
     */
+
    const normalizedImages = Array.isArray(images)
     ? images
        .filter((image) => typeof image === "string")
@@ -339,8 +416,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     : [];
 
    /*
-    * Normalize videos.
+    * ============================================================
+    * NORMALIZE VIDEOS
+    * ============================================================
     */
+
    const normalizedVideos = Array.isArray(videos)
     ? videos
        .filter((video) => typeof video === "string")
@@ -349,16 +429,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     : [];
 
    /*
-    * Create product.
+    * ============================================================
+    * CREATE PRODUCT
+    * ============================================================
     */
+
    const product = await Product.create({
     storeId,
 
     name: String(name).trim(),
 
-    slug: String(slug).trim(),
+    slug: normalizedSlug,
 
-    sku: String(sku).trim().toUpperCase(),
+    sku: normalizedSku,
 
     description: description ? String(description).trim() : "",
 
@@ -376,6 +459,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
     images: normalizedImages,
 
+    tryOnImage: typeof tryOnImage === "string" ? tryOnImage.trim() : "",
+
     videos: normalizedVideos,
 
     quantity: quantity === undefined || quantity === null || quantity === "" ? 0 : Number(quantity),
@@ -390,8 +475,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
    });
 
    /*
-    * Return populated product.
+    * ============================================================
+    * RETURN POPULATED PRODUCT
+    * ============================================================
     */
+
    const populatedProduct = await Product.findById(product._id).populate("categoryId", "name slug description").populate("brandId", "name slug logo").lean();
 
    return res.status(201).json({
@@ -405,12 +493,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
    * METHOD NOT ALLOWED
    * ============================================================
    */
+
+  res.setHeader("Allow", ["GET", "POST"]);
+
   return res.status(405).json({
    success: false,
-   message: "Method not allowed.",
+   message: `Method ${req.method} not allowed.`,
   });
  } catch (error: any) {
   console.error("Products API error:", error);
+
+  /*
+   * ============================================================
+   * AUTHORIZATION ERRORS
+   * ============================================================
+   */
 
   if (error?.message === "UNAUTHORIZED") {
    return res.status(401).json({
@@ -427,16 +524,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   }
 
   /*
-   * MongoDB duplicate key.
+   * ============================================================
+   * MONGODB DUPLICATE KEY
+   * ============================================================
+   *
+   * This is the final protection in case two requests
+   * create the same SKU/slug at almost the same time.
    */
+
   if (error?.code === 11000) {
-   const duplicatedField = Object.keys(error.keyPattern || {})[0];
+   const keyPattern = error?.keyPattern || {};
+
+   if (keyPattern.storeId && keyPattern.slug) {
+    return res.status(409).json({
+     success: false,
+     message: "A product with this slug already exists in this store.",
+    });
+   }
+
+   if (keyPattern.storeId && keyPattern.sku) {
+    return res.status(409).json({
+     success: false,
+     message: "A product with this SKU already exists in this store.",
+    });
+   }
 
    return res.status(409).json({
     success: false,
-    message: duplicatedField ? `A product with this ${duplicatedField} already exists.` : "Duplicate product data.",
+    message: "Duplicate product data.",
    });
   }
+
+  /*
+   * ============================================================
+   * INTERNAL SERVER ERROR
+   * ============================================================
+   */
 
   return res.status(500).json({
    success: false,

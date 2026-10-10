@@ -13,9 +13,9 @@ interface SalesOverviewProps {
 }
 
 function formatMoney(amount: number, currency: string) {
- return new Intl.NumberFormat("en-US", {
+ return new Intl.NumberFormat("vi-VN", {
   style: "currency",
-  currency: currency || "USD",
+  currency: currency === "VNĐ" ? "VND" : currency || "VND",
   maximumFractionDigits: 0,
  }).format(amount);
 }
@@ -76,7 +76,7 @@ export default function SalesOverview({ data }: SalesOverviewProps) {
   return chartData.reduce((sum, item) => sum + item.orders, 0);
  }, [chartData]);
 
- const currency = data[0]?.currency || "USD";
+ const currency = data[0]?.currency || "VNĐ";
 
  return (
   <div className="rounded-2xl border border-gray-100 bg-white shadow-sm">

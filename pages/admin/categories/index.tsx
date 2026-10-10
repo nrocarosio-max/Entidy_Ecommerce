@@ -24,7 +24,7 @@ interface Category {
  updatedAt: string;
 }
 
-export default function CollectionsPage() {
+export default function CategoriesPage() {
  const { data: session, status } = useSession();
 
  const [categories, setCategories] = useState<Category[]>([]);
@@ -122,7 +122,7 @@ export default function CollectionsPage() {
    const data = await response.json();
 
    if (!response.ok) {
-    throw new Error(data?.message || "Failed to load collections.");
+    throw new Error(data?.message || "Failed to load categories.");
    }
 
    setCategories(data.categories ?? []);
@@ -131,7 +131,7 @@ export default function CollectionsPage() {
 
    setCategories([]);
 
-   setError(error instanceof Error ? error.message : "Failed to load collections.");
+   setError(error instanceof Error ? error.message : "Failed to load categories.");
   } finally {
    setLoading(false);
   }
@@ -200,7 +200,7 @@ export default function CollectionsPage() {
    const data = await response.json();
 
    if (!response.ok) {
-    throw new Error(data?.message || "Failed to delete collection.");
+    throw new Error(data?.message || "Failed to delete category.");
    }
 
    setCategories((current) => current.filter((category) => category._id !== deleteId));
@@ -209,7 +209,7 @@ export default function CollectionsPage() {
   } catch (error) {
    console.error(error);
 
-   setError(error instanceof Error ? error.message : "Failed to delete collection.");
+   setError(error instanceof Error ? error.message : "Failed to delete category.");
   } finally {
    setDeleting(false);
   }
@@ -241,16 +241,16 @@ export default function CollectionsPage() {
 
        <FaChevronRight size={9} />
 
-       <span className="text-gray-500">Collections</span>
+       <span className="text-gray-500">Categories</span>
       </div>
 
-      <h1 className="mt-2 text-2xl font-bold tracking-tight text-gray-900 md:text-3xl">Collections</h1>
+      <h1 className="mt-2 text-2xl font-bold tracking-tight text-gray-900 md:text-3xl">Categories</h1>
 
-      <p className="mt-1 text-sm text-gray-500">Organize products into collections and categories.</p>
+      <p className="mt-1 text-sm text-gray-500">Organize products into categories.</p>
      </div>
 
      <Link
-      href="/admin/collections/create"
+      href="/admin/categories/create"
       className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold text-white transition ${
        activeStoreId ? "bg-gray-900 hover:bg-gray-800" : "cursor-not-allowed bg-gray-300"
       }`}
@@ -260,7 +260,7 @@ export default function CollectionsPage() {
        }
       }}>
       <FaPlus size={12} />
-      Add Collection
+      Add Category
      </Link>
     </div>
 
@@ -277,7 +277,7 @@ export default function CollectionsPage() {
 
     {/* No store selected */}
     {isSuperAdmin && !selectedStore && !storesLoading && (
-     <div className="mb-6 rounded-xl border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-700">Please select a store to manage collections.</div>
+     <div className="mb-6 rounded-xl border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-700">Please select a store to manage categories.</div>
     )}
 
     {/* Main Card */}
@@ -285,10 +285,10 @@ export default function CollectionsPage() {
      {/* Toolbar */}
      <div className="flex flex-col gap-3 border-b border-gray-100 p-4 md:flex-row md:items-center md:justify-between">
       <div>
-       <p className="text-sm font-semibold text-gray-900">All Collections</p>
+       <p className="text-sm font-semibold text-gray-900">All Categories</p>
 
        <p className="mt-0.5 text-xs text-gray-400">
-        {categories.length} {categories.length === 1 ? "collection" : "collections"}
+        {categories.length} {categories.length === 1 ? "category" : "categories"}
        </p>
       </div>
 
@@ -318,7 +318,7 @@ export default function CollectionsPage() {
          type="text"
          value={search}
          onChange={(event) => setSearch(event.target.value)}
-         placeholder="Search collections..."
+         placeholder="Search categories..."
          className="h-10 w-full rounded-xl border border-gray-200 bg-gray-50 pl-9 pr-3 text-sm text-gray-700 outline-none transition placeholder:text-gray-400 focus:border-gray-300 focus:bg-white"
         />
        </div>
@@ -347,7 +347,7 @@ export default function CollectionsPage() {
 
        <p className="mt-4 text-sm font-semibold text-gray-800">Select a store</p>
 
-       <p className="mt-1 max-w-sm text-xs leading-5 text-gray-400">Select a store above to view and manage its collections.</p>
+       <p className="mt-1 max-w-sm text-xs leading-5 text-gray-400">Select a store above to view and manage its categories.</p>
       </div>
      ) : filteredCategories.length === 0 ? (
       /* Empty */
@@ -356,18 +356,18 @@ export default function CollectionsPage() {
         <FaFolder size={20} />
        </div>
 
-       <p className="mt-4 text-sm font-semibold text-gray-800">{search ? "No collections found" : "No collections yet"}</p>
+       <p className="mt-4 text-sm font-semibold text-gray-800">{search ? "No categories found" : "No categories yet"}</p>
 
        <p className="mt-1 max-w-sm text-xs leading-5 text-gray-400">
-        {search ? "Try another search keyword." : "Create your first collection to start organizing products."}
+        {search ? "Try another search keyword." : "Create your first category to start organizing products."}
        </p>
 
        {!search && (
         <Link
-         href="/admin/collections/create"
+         href="/admin/categories/create"
          className="mt-4 inline-flex h-10 items-center gap-2 rounded-xl bg-gray-900 px-4 text-xs font-semibold text-white transition hover:bg-gray-800">
          <FaPlus size={10} />
-         Add Collection
+         Add Category
         </Link>
        )}
       </div>
@@ -378,7 +378,7 @@ export default function CollectionsPage() {
         <table className="w-full">
          <thead>
           <tr className="border-b border-gray-100 bg-gray-50/60 text-left">
-           <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-400">Collection</th>
+           <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-400">Category</th>
 
            <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-400">Slug</th>
 
@@ -433,7 +433,7 @@ export default function CollectionsPage() {
             <td className="px-5 py-4">
              <div className="flex justify-end gap-1">
               <Link
-               href={`/admin/collections/${category._id}/edit`}
+               href={`/admin/categories/${category._id}/edit`}
                className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100 hover:text-gray-900"
                aria-label={`Edit ${category.name}`}>
                <FaEdit size={12} />
@@ -491,7 +491,7 @@ export default function CollectionsPage() {
 
             <div className="mt-3 flex gap-2">
              <Link
-              href={`/admin/collections/${category._id}/edit`}
+              href={`/admin/categories/${category._id}/edit`}
               className="inline-flex h-8 items-center gap-2 rounded-lg border border-gray-200 px-3 text-xs font-medium text-gray-600 transition hover:bg-gray-50">
               <FaEdit size={10} />
               Edit
@@ -523,10 +523,10 @@ export default function CollectionsPage() {
        <FaTrash size={15} />
       </div>
 
-      <h2 className="mt-4 text-lg font-bold text-gray-900">Delete collection?</h2>
+      <h2 className="mt-4 text-lg font-bold text-gray-900">Delete category?</h2>
 
       <p className="mt-2 text-sm leading-6 text-gray-500">
-       This action will permanently delete this collection. Make sure it is not being used by products or child collections.
+       This action will permanently delete this category. Make sure it is not being used by products or child categories.
       </p>
 
       <div className="mt-6 flex justify-end gap-2">

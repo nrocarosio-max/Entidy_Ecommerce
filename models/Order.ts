@@ -145,7 +145,36 @@ const OrderSchema = new Schema(
    default: "",
    trim: true,
   },
+  // Affiliate attribution captured when the order is created.
+  affiliateId: {
+   type: Schema.Types.ObjectId,
+   ref: "Affiliate",
+   default: null,
+   index: true,
+  },
 
+  affiliateStoreId: {
+   type: Schema.Types.ObjectId,
+   ref: "AffiliateStore",
+   default: null,
+  },
+
+  affiliateCode: {
+   type: String,
+   default: "",
+   uppercase: true,
+   trim: true,
+   index: true,
+  },
+  isDeleted: {
+   type: Boolean,
+   default: false,
+   index: true,
+  },
+  deletedAt: {
+   type: Date,
+   default: null,
+  },
   createdBy: {
    type: Schema.Types.ObjectId,
    ref: "User",

@@ -7,7 +7,12 @@ import { Order } from "~/models/Order";
 import { Product } from "~/models/Product";
 import { Customer } from "~/models/Customer";
 import { Payment } from "~/models/Payment";
+import { Types } from "mongoose";
 
+import { Affiliate } from "~/models/Affiliate";
+import { AffiliateCommission } from "~/models/AffiliateCommission";
+import { AffiliatePayment } from "~/models/AffiliatePayment";
+import { AffiliateStore } from "~/models/AffiliateStore";
 const ORDER_STATUSES = ["PENDING", "CONFIRMED", "PROCESSING", "SHIPPED", "DELIVERED", "CANCELLED", "RETURNED"] as const;
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -64,7 +69,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const defaultFromDate = new Date(now.getFullYear(), now.getMonth(), 1);
 
-  const defaultToDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const defaultToDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
 
   const fromDateParam = typeof req.query.fromDate === "string" ? req.query.fromDate : "";
 
@@ -302,6 +307,118 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   /*
    * ---------------------------------------------------------
+   * 9. AFFILIATE OVERVIEW
+   * ---------------------------------------------------------
+   */
+
+  const affiliateStoreFilter = storeId ? { storeId: new Types.ObjectId(storeId) } : {};
+
+  // Accumulated figures are calculated through the selected end date.
+  const affiliateCommissionFilter = {
+   ...affiliateStoreFilter,
+   currency: "VND",
+   status: { $ne: "REVERSED" },
+   createdAt: { $lte: toDate },
+  };
+
+  const affiliatePaymentFilter = {
+   ...affiliateStoreFilter,
+   currency: "VND",
+   isDeleted: { $ne: true },
+   paymentDate: { $lte: toDate },
+  };
+
+  const referredOrderFilter = {
+   ...orderFilter,
+   affiliateId: { $ne: null },
+   isDeleted: { $ne: true },
+   createdAt: {
+    $gte: fromDate,
+    $lte: toDate,
+   },
+  };
+
+  const [activeAffiliates, referredOrders, commissionAggregation, affiliatePaymentAggregation] = await Promise.all([
+   // Count active affiliates linked to the selected store.
+   // When no store is selected, count unique active affiliates
+   // across all active affiliate-store relationships.
+   AffiliateStore.aggregate([
+    {
+     $match: {
+      ...affiliateStoreFilter,
+      status: "ACTIVE",
+     },
+    },
+    {
+     $lookup: {
+      from: "affiliates",
+      localField: "affiliateId",
+      foreignField: "_id",
+      as: "affiliate",
+     },
+    },
+    {
+     $unwind: "$affiliate",
+    },
+    {
+     $match: {
+      "affiliate.status": "ACTIVE",
+     },
+    },
+    {
+     $group: {
+      _id: "$affiliateId",
+     },
+    },
+    {
+     $count: "total",
+    },
+   ]).then((result) => result[0]?.total ?? 0),
+
+   // Count referred orders created within the selected date range.
+   Order.countDocuments(referredOrderFilter),
+
+   // Total commission accumulated up to the selected end date.
+   AffiliateCommission.aggregate([
+    {
+     $match: affiliateCommissionFilter,
+    },
+    {
+     $group: {
+      _id: null,
+      total: { $sum: "$amount" },
+     },
+    },
+   ]),
+
+   // Total payments recorded up to the selected end date.
+   AffiliatePayment.aggregate([
+    {
+     $match: affiliatePaymentFilter,
+    },
+    {
+     $group: {
+      _id: null,
+      total: { $sum: "$amount" },
+     },
+    },
+   ]),
+  ]);
+
+  const totalCommission = commissionAggregation[0]?.total ?? 0;
+  const totalPaid = affiliatePaymentAggregation[0]?.total ?? 0;
+
+  const affiliateOverview = {
+   activeAffiliates,
+   referredOrders,
+   totalCommission,
+   totalPaid,
+   remainingCommission: Math.max(0, totalCommission - totalPaid),
+   currency: "VND" as const,
+  };
+  /*
+   
+   * ---------------------------------------------------------
    * Execute queries in parallel.
    * ---------------------------------------------------------
    */
@@ -416,16 +533,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     lowStockProducts: lowStockProducts.length,
    },
 
+   affiliateOverview,
+
    orderStatus,
-
    salesOverview,
-
    paymentStatus,
-
    reconciliationStatus,
-
    recentOrders,
-
    lowStockProducts,
   });
  } catch (error) {

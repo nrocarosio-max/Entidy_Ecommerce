@@ -1,17 +1,19 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
+import mongoose from "mongoose";
 
 import { connectDB } from "~/lib/mongodb";
+import { requireSuperAdmin } from "~/lib/permissions";
+
 import { User } from "~/models/User";
 import { Role } from "~/models/Role";
 import { Store } from "~/models/Store";
-import { requireSuperAdmin } from "~/lib/permissions";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
  try {
-  await requireSuperAdmin(req);
   await connectDB();
+
+  const currentUser = await requireSuperAdmin(req);
 
   const { id } = req.query;
 
@@ -24,14 +26,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const userId = new mongoose.Types.ObjectId(id);
 
-  /*
+  /**
    * GET USER
    */
   if (req.method === "GET") {
    const user = await User.findById(userId)
-    .select("-passwordHash")
-    .populate("roleId", "name code description permissions isActive")
-    .populate("storeId", "name slug isActive")
+    .select("_id name email phone roleId storeId isActive lastLoginAt createdAt updatedAt")
+    .populate("roleId", "_id name code description permissions")
+    .populate("storeId", "_id name slug isActive")
     .lean();
 
    if (!user) {
@@ -47,12 +49,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    });
   }
 
-  /*
-   * PATCH USER
+  /**
+   * UPDATE USER
    */
   if (req.method === "PATCH") {
-   const { name, email, phone, password, roleId, storeId, isActive } = req.body;
-
    const user = await User.findById(userId);
 
    if (!user) {
@@ -62,167 +62,86 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
    }
 
-   /*
-    * Prevent changing the currently logged-in
-    * SUPER_ADMIN into another role.
-    *
-    * More importantly, do not allow the system
-    * admin account to lose SUPER_ADMIN access
-    * accidentally.
-    */
-   const currentRole = await Role.findById(user.roleId);
+   const { name, email, phone, password, roleId, storeId, isActive } = req.body;
 
-   if (!currentRole) {
-    return res.status(400).json({
-     success: false,
-     message: "Current user role not found.",
-    });
-   }
-
-   /*
-    * Update name
-    */
    if (name !== undefined) {
-    const normalizedName = String(name).trim();
+    const newName = String(name).trim();
 
-    if (!normalizedName) {
+    if (!newName) {
      return res.status(400).json({
       success: false,
-      message: "Name cannot be empty.",
+      message: "Name is required.",
      });
     }
 
-    user.name = normalizedName;
+    user.name = newName;
    }
 
-   /*
-    * Update email
-    */
    if (email !== undefined) {
-    const normalizedEmail = String(email).trim().toLowerCase();
+    const newEmail = String(email).trim().toLowerCase();
 
-    if (!normalizedEmail) {
+    if (!newEmail) {
      return res.status(400).json({
       success: false,
-      message: "Email cannot be empty.",
+      message: "Email is required.",
      });
     }
 
     const existingUser = await User.findOne({
-     email: normalizedEmail,
-     _id: {
-      $ne: userId,
-     },
-    });
+     email: newEmail,
+     _id: { $ne: userId },
+    }).lean();
 
     if (existingUser) {
      return res.status(409).json({
       success: false,
-      message: "A user with this email already exists.",
+      message: "Another user already uses this email.",
      });
     }
 
-    user.email = normalizedEmail;
+    user.email = newEmail;
    }
 
-   /*
-    * Update phone
-    */
    if (phone !== undefined) {
-    user.phone = String(phone).trim();
+    user.phone = String(phone || "").trim();
    }
-
-   /*
-    * Update password
-    */
-   if (password !== undefined) {
-    const normalizedPassword = String(password);
-
-    if (normalizedPassword.length < 8) {
-     return res.status(400).json({
-      success: false,
-      message: "Password must be at least 8 characters.",
-     });
-    }
-
-    user.passwordHash = await bcrypt.hash(normalizedPassword, 12);
-   }
-
-   /*
-    * Update role
-    */
-   let finalRole = currentRole;
 
    if (roleId !== undefined) {
-    const newRole = await Role.findById(roleId);
-
-    if (!newRole) {
-     return res.status(404).json({
-      success: false,
-      message: "Role not found.",
-     });
-    }
-
-    if (!newRole.isActive) {
+    if (!roleId || !mongoose.Types.ObjectId.isValid(roleId)) {
      return res.status(400).json({
       success: false,
-      message: "This role is inactive.",
+      message: "Invalid role ID.",
      });
     }
 
-    /*
-     * Do not allow the last/current
-     * SUPER_ADMIN account to accidentally
-     * lose SUPER_ADMIN role.
-     */
-    if (currentRole.code === "SUPER_ADMIN" && newRole.code !== "SUPER_ADMIN") {
-     const superAdminCount = await User.countDocuments({
-      roleId: currentRole._id,
-      isActive: true,
-     });
+    const role = await Role.findById(roleId).lean();
 
-     if (superAdminCount <= 1) {
-      return res.status(400).json({
-       success: false,
-       message: "Cannot change the last active SUPER_ADMIN.",
-      });
-     }
+    if (!role || !role.isActive) {
+     return res.status(400).json({
+      success: false,
+      message: "Role not found or inactive.",
+     });
     }
 
-    user.roleId = newRole._id;
-    finalRole = newRole;
+    if (role.code === "SUPER_ADMIN") {
+     return res.status(403).json({
+      success: false,
+      message: "You cannot assign SUPER_ADMIN role.",
+     });
+    }
+
+    user.roleId = role._id;
    }
 
-   /*
-    * Determine final store
-    */
-   if (finalRole.code === "SUPER_ADMIN") {
-    /*
-     * SUPER_ADMIN must not belong
-     * to any store.
-     */
-    if (storeId !== undefined && storeId !== null && storeId !== "") {
+   if (storeId !== undefined) {
+    if (!storeId || !mongoose.Types.ObjectId.isValid(storeId)) {
      return res.status(400).json({
       success: false,
-      message: "SUPER_ADMIN cannot be assigned to a store.",
+      message: "Valid store is required.",
      });
     }
 
-    user.storeId = null;
-   } else {
-    /*
-     * Non-SUPER_ADMIN must have a store.
-     */
-    const finalStoreId = storeId !== undefined ? storeId : user.storeId;
-
-    if (!finalStoreId) {
-     return res.status(400).json({
-      success: false,
-      message: "storeId is required for this role.",
-     });
-    }
-
-    const store = await Store.findById(finalStoreId);
+    const store = await Store.findById(storeId).lean();
 
     if (!store) {
      return res.status(404).json({
@@ -234,36 +153,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!store.isActive) {
      return res.status(400).json({
       success: false,
-      message: "Cannot assign a user to an inactive store.",
+      message: "Selected store is inactive.",
      });
     }
 
     user.storeId = store._id;
    }
 
-   /*
-    * Update active status
-    */
-   if (isActive !== undefined) {
-    /*
-     * Do not allow disabling the last
-     * active SUPER_ADMIN.
-     */
-    if (isActive === false && finalRole.code === "SUPER_ADMIN") {
-     const superAdminCount = await User.countDocuments({
-      roleId: finalRole._id,
-      isActive: true,
-      _id: {
-       $ne: userId,
-      },
+   if (password !== undefined && String(password).trim()) {
+    if (String(password).length < 6) {
+     return res.status(400).json({
+      success: false,
+      message: "Password must be at least 6 characters.",
      });
+    }
 
-     if (superAdminCount === 0) {
-      return res.status(400).json({
-       success: false,
-       message: "Cannot disable the last active SUPER_ADMIN.",
-      });
-     }
+    user.passwordHash = await bcrypt.hash(String(password), 12);
+   }
+
+   if (isActive !== undefined) {
+    if (user._id.toString() === currentUser.id) {
+     return res.status(400).json({
+      success: false,
+      message: "You cannot change your own status.",
+     });
     }
 
     user.isActive = Boolean(isActive);
@@ -271,13 +184,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
    await user.save();
 
-   /*
-    * Return updated user
-    */
    const updatedUser = await User.findById(user._id)
-    .select("-passwordHash")
-    .populate("roleId", "name code description permissions isActive")
-    .populate("storeId", "name slug isActive")
+    .select("_id name email phone roleId storeId isActive lastLoginAt createdAt updatedAt")
+    .populate("roleId", "_id name code description")
+    .populate("storeId", "_id name slug isActive")
     .lean();
 
    return res.status(200).json({
@@ -287,13 +197,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    });
   }
 
-  /*
+  /**
    * DELETE USER
-   *
-   * Soft delete:
-   * isActive = false
    */
   if (req.method === "DELETE") {
+   if (id === currentUser.id) {
+    return res.status(400).json({
+     success: false,
+     message: "You cannot delete your own account.",
+    });
+   }
+
    const user = await User.findById(userId);
 
    if (!user) {
@@ -303,40 +217,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
    }
 
-   const role = await Role.findById(user.roleId);
-
-   if (!role) {
-    return res.status(400).json({
-     success: false,
-     message: "User role not found.",
-    });
-   }
-
-   /*
-    * Never allow deleting the last
-    * active SUPER_ADMIN.
-    */
-   if (role.code === "SUPER_ADMIN") {
-    const superAdminCount = await User.countDocuments({
-     roleId: role._id,
-     isActive: true,
-    });
-
-    if (superAdminCount <= 1) {
-     return res.status(400).json({
-      success: false,
-      message: "Cannot disable the last active SUPER_ADMIN.",
-     });
-    }
-   }
-
-   user.isActive = false;
-
-   await user.save();
+   await User.findByIdAndDelete(userId);
 
    return res.status(200).json({
     success: true,
-    message: "User disabled successfully.",
+    message: "User deleted successfully.",
    });
   }
 
@@ -346,28 +231,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    success: false,
    message: `Method ${req.method} not allowed.`,
   });
- } catch (error) {
-  console.error("ADMIN USER DETAIL API ERROR:", error);
+ } catch (error: any) {
+  console.error("User detail API error:", error);
 
-  if (error instanceof Error) {
-   if (error.message === "UNAUTHORIZED") {
-    return res.status(401).json({
-     success: false,
-     message: "Authentication required.",
-    });
-   }
+  if (error?.message === "UNAUTHORIZED") {
+   return res.status(401).json({
+    success: false,
+    message: "Unauthorized.",
+   });
+  }
 
-   if (error.message === "FORBIDDEN") {
-    return res.status(403).json({
-     success: false,
-     message: "Only SUPER_ADMIN can manage users.",
-    });
-   }
+  if (error?.message === "FORBIDDEN") {
+   return res.status(403).json({
+    success: false,
+    message: "Only SUPER_ADMIN can manage users.",
+   });
+  }
+
+  if (error?.code === 11000) {
+   return res.status(409).json({
+    success: false,
+    message: "A user with this email already exists.",
+   });
   }
 
   return res.status(500).json({
    success: false,
-   message: "Internal server error.",
+   message: error?.message || "Internal server error.",
   });
  }
 }

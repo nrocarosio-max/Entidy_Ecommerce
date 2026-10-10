@@ -94,6 +94,12 @@ const roles = [
   description: "Manage inventory, orders and shipping operations.",
   permissions: ["products.read", "inventory.read", "inventory.update", "orders.read", "orders.update", "shipping.read", "shipping.create", "shipping.update"],
  },
+ {
+  name: "Affiliate",
+  code: "AFFILIATE",
+  description: "Promote products and track personal referrals and commissions.",
+  permissions: ["affiliate.dashboard.read", "affiliate.links.read", "affiliate.orders.read", "affiliate.commissions.read"],
+ },
 ];
 
 async function createRoles() {

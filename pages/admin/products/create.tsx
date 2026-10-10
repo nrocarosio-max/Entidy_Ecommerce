@@ -26,7 +26,7 @@ export default function CreateProductPage() {
 
  const [uploadingImages, setUploadingImages] = useState(false);
  const [uploadingVideos, setUploadingVideos] = useState(false);
-
+ const [uploadingTryOnImage, setUploadingTryOnImage] = useState(false);
  const [stores, setStores] = useState<Store[]>([]);
  const [collections, setCollections] = useState<Collection[]>([]);
  const [brands, setBrands] = useState<Brand[]>([]);
@@ -47,6 +47,7 @@ export default function CreateProductPage() {
  const [currency, setCurrency] = useState("VND");
 
  const [images, setImages] = useState<string[]>([]);
+ const [tryOnImage, setTryOnImage] = useState("");
  const [videos, setVideos] = useState<string[]>([]);
 
  const [quantity, setQuantity] = useState("0");
@@ -128,7 +129,48 @@ export default function CreateProductPage() {
    event.target.value = "";
   }
  }
+ async function handleTryOnImageUpload(event: React.ChangeEvent<HTMLInputElement>) {
+  const file = event.target.files?.[0];
 
+  if (!file) {
+   return;
+  }
+
+  try {
+   setUploadingTryOnImage(true);
+   setError("");
+
+   const formData = new FormData();
+
+   formData.append("file", file);
+
+   const response = await fetch("/api/admin/upload", {
+    method: "POST",
+    body: formData,
+   });
+
+   const data = await response.json();
+
+   if (!response.ok) {
+    throw new Error(data?.message || "Failed to upload try-on image.");
+   }
+
+   if (data.resourceType !== "image") {
+    throw new Error("Try-on media must be an image.");
+   }
+
+   setTryOnImage(data.url || "");
+  } catch (err) {
+   setError(err instanceof Error ? err.message : "Failed to upload try-on image.");
+  } finally {
+   setUploadingTryOnImage(false);
+   event.target.value = "";
+  }
+ }
+
+ function removeTryOnImage() {
+  setTryOnImage("");
+ }
  async function handleVideoUpload(event: React.ChangeEvent<HTMLInputElement>) {
   const files = event.target.files;
 
@@ -299,7 +341,7 @@ export default function CreateProductPage() {
    return;
   }
 
-  if (uploadingImages || uploadingVideos) {
+  if (uploadingImages || uploadingVideos || uploadingTryOnImage) {
    setError("Please wait until all files finish uploading.");
    return;
   }
@@ -337,6 +379,7 @@ export default function CreateProductPage() {
      currency: currency.trim().toUpperCase(),
 
      images: cleanImages,
+     tryOnImage: tryOnImage.trim(),
      videos: cleanVideos,
 
      quantity: Number(quantity),
@@ -691,7 +734,59 @@ export default function CreateProductPage() {
        )}
       </div>
      </section>
+     {/* Virtual Try-On */}
+     <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+      <div className="border-b border-gray-100 px-6 py-5">
+       <div className="flex items-center justify-between gap-4">
+        <div>
+         <h2 className="font-semibold text-gray-900">Virtual Try-On</h2>
 
+         <p className="mt-1 text-sm text-gray-500">Upload the image used for virtual try-on.</p>
+        </div>
+
+        <label
+         className={`inline-flex h-10 items-center justify-center rounded-xl bg-gray-900 px-4 text-sm font-medium text-white transition ${
+          uploadingTryOnImage ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:bg-gray-800"
+         }`}>
+         {uploadingTryOnImage ? "Uploading..." : "Upload Image"}
+
+         <input
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/gif,image/avif"
+          onChange={handleTryOnImageUpload}
+          disabled={uploadingTryOnImage}
+          className="hidden"
+         />
+        </label>
+       </div>
+      </div>
+
+      <div className="p-6">
+       {!tryOnImage ? (
+        <div className="flex min-h-40 items-center justify-center rounded-xl border border-dashed border-gray-300 bg-gray-50">
+         <div className="text-center">
+          <p className="text-sm font-medium text-gray-700">No try-on image uploaded</p>
+
+          <p className="mt-1 text-xs text-gray-500">Upload one image for virtual try-on.</p>
+         </div>
+        </div>
+       ) : (
+        <div className="max-w-sm overflow-hidden rounded-xl border border-gray-200 bg-gray-50">
+         <div className="aspect-square">
+          <img src={tryOnImage} alt="Virtual try-on" className="h-full w-full object-cover" />
+         </div>
+
+         <div className="flex items-center justify-between border-t border-gray-200 bg-white px-3 py-3">
+          <p className="truncate text-xs text-gray-500">Try-on image</p>
+
+          <button type="button" onClick={removeTryOnImage} className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-red-500 transition hover:bg-red-50">
+           Remove
+          </button>
+         </div>
+        </div>
+       )}
+      </div>
+     </section>
      {/* Product Videos */}
      <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
       <div className="border-b border-gray-100 px-6 py-5">
@@ -822,11 +917,11 @@ export default function CreateProductPage() {
 
       <button
        type="submit"
-       disabled={loading || storesLoading || dependenciesLoading || uploadingImages || uploadingVideos}
+       disabled={loading || storesLoading || dependenciesLoading || uploadingImages || uploadingVideos || uploadingTryOnImage}
        className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-gray-900 px-6 text-sm font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50">
        <FaSave size={14} />
 
-       {loading ? "Creating..." : uploadingImages || uploadingVideos ? "Uploading..." : "Create Product"}
+       {loading ? "Creating..." : uploadingImages || uploadingVideos || uploadingTryOnImage ? "Uploading..." : "Create Product"}
       </button>
      </div>
     </div>

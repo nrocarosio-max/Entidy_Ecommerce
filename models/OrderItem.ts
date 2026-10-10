@@ -71,7 +71,12 @@ const OrderItemSchema = new Schema(
    required: true,
    min: 0,
   },
-
+  affiliateCommissionRate: {
+   type: Number,
+   default: null,
+   min: 0,
+   max: 100,
+  },
   currency: {
    type: String,
    required: true,
@@ -79,6 +84,7 @@ const OrderItemSchema = new Schema(
    trim: true,
   },
  },
+
  {
   timestamps: true,
  },

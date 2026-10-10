@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongoose from "mongoose";
-
+import { resolveAffiliate } from "~/lib/resolveAffiliate";
 import { connectDB } from "~/lib/mongodb";
 import { requirePermission, getAuthorizedStoreId } from "~/lib/permissions";
 import { normalizeText } from "~/lib/normalizeText";
@@ -194,7 +194,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     ]),
 
     OrderStatus.find({
-     storeId,
      isActive: true,
     })
      .sort({
@@ -345,15 +344,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     */
 
    const initialStatus = await OrderStatus.findOne({
-    storeId,
-    code: "WAITING_STOCK",
+    isInitial: true,
     isActive: true,
    });
 
    if (!initialStatus) {
     return res.status(500).json({
      success: false,
-     message: "Initial order status WAITING_STOCK was not found.",
+     message: "No active initial order status was found.",
     });
    }
 
@@ -367,7 +365,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
    try {
     session.startTransaction();
-
+    const affiliateAttribution = await resolveAffiliate({
+     affiliateCode: body.affiliateCode,
+     storeId,
+     session,
+    });
     /*
      * ==================================================
      * CUSTOMER
@@ -650,6 +652,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
        trackingNumber: typeof body.trackingNumber === "string" ? body.trackingNumber.trim() : "",
 
        createdBy: user.id,
+       affiliateId: affiliateAttribution?.affiliateId ?? null,
+       affiliateStoreId: affiliateAttribution?.affiliateStoreId ?? null,
+       affiliateCode: affiliateAttribution?.affiliateCode ?? "",
       },
      ],
      {

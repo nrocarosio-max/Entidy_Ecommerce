@@ -12,7 +12,7 @@ export default function CartHeader() {
  const [isMounted, setIsMounted] = useState(false);
 
  const getCartFromStorage = () => {
-  const savedCart = localStorage.getItem("watches_cart");
+  const savedCart = localStorage.getItem("ecommerce_cart");
 
   if (savedCart) {
    try {
@@ -153,7 +153,7 @@ export default function CartHeader() {
         {cart.length > 0 && (
          <div className="shrink-0 border-t border-gray-200 bg-white p-5 md:p-6">
           <Link
-           href="/order/cart"
+           href="/cart"
            onClick={() => setIsOpen(false)}
            className="flex w-full items-center justify-center rounded-full bg-[var(--primary-color)] py-4 font-bold text-white transition hover:opacity-90">
            View Cart

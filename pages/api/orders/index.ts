@@ -2,6 +2,8 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import mongoose from "mongoose";
 
 import { connectDB } from "~/lib/mongodb";
+import { resolveAffiliate } from "~/lib/resolveAffiliate";
+
 import { Order } from "~/models/Order";
 import { OrderItem } from "~/models/OrderItem";
 import { OrderStatus } from "~/models/OrderStatus";
@@ -10,9 +12,9 @@ import { Customer } from "~/models/Customer";
 import { Store } from "~/models/Store";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
- await connectDB();
-
  if (req.method !== "POST") {
+  res.setHeader("Allow", ["POST"]);
+
   return res.status(405).json({
    success: false,
    message: "Method not allowed.",
@@ -20,22 +22,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
  }
 
  try {
+  await connectDB();
+
+  const body = req.body || {};
+
   const {
    storeId,
    customer,
    customerId,
    shippingAddress,
    items,
-   subtotal,
    shippingFee = 0,
    discount = 0,
-   total,
    currency,
    paymentMethod = "COD",
-   paymentStatus = "PENDING",
    note = "",
    shippingMethod = "",
-  } = req.body;
+   affiliateCode = "",
+  } = body;
 
   /*
    * --------------------------------------------------
@@ -43,7 +47,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    * --------------------------------------------------
    */
 
-  if (!storeId || !mongoose.Types.ObjectId.isValid(storeId)) {
+  if (typeof storeId !== "string" || !mongoose.Types.ObjectId.isValid(storeId)) {
    return res.status(400).json({
     success: false,
     message: "Valid storeId is required.",
@@ -64,65 +68,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   /*
    * --------------------------------------------------
-   * Find or create customer
-   * --------------------------------------------------
-   */
-
-  let customerDoc;
-
-  if (customerId && mongoose.Types.ObjectId.isValid(customerId)) {
-   customerDoc = await Customer.findOne({
-    _id: customerId,
-    storeId,
-    isActive: true,
-   });
-  }
-
-  if (!customerDoc) {
-   const customerName = customer?.name || customer?.fullName || "";
-
-   const customerPhone = customer?.phone || "";
-
-   if (!customerName.trim() || !customerPhone.trim()) {
-    return res.status(400).json({
-     success: false,
-     message: "Customer name and phone are required.",
-    });
-   }
-
-   customerDoc = await Customer.findOneAndUpdate(
-    {
-     storeId,
-     phone: customerPhone.trim(),
-    },
-    {
-     $set: {
-      name: customerName.trim(),
-      nameNormalized: customerName
-       .normalize("NFD")
-       .replace(/[\u0300-\u036f]/g, "")
-       .toLowerCase()
-       .trim(),
-      isActive: true,
-     },
-    },
-    {
-     new: true,
-     upsert: true,
-     setDefaultsOnInsert: true,
-    },
-   );
-  }
-
-  if (!customerDoc) {
-   return res.status(400).json({
-    success: false,
-    message: "Unable to create customer.",
-   });
-  }
-
-  /*
-   * --------------------------------------------------
    * Validate items
    * --------------------------------------------------
    */
@@ -134,7 +79,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    });
   }
 
-  const productIds = items.map((item: any) => item.productId);
+  const productIds = items.map((item: any) => (typeof item?.productId === "string" ? item.productId : ""));
 
   const validProductIds = productIds.every((id: string) => mongoose.Types.ObjectId.isValid(id));
 
@@ -145,15 +90,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    });
   }
 
+  const uniqueProductIds = Array.from(new Set(productIds));
+
   const products = await Product.find({
    _id: {
-    $in: productIds,
+    $in: uniqueProductIds,
    },
    storeId,
    isActive: true,
-  });
+  }).lean();
 
-  if (products.length !== productIds.length) {
+  if (products.length !== uniqueProductIds.length) {
    return res.status(400).json({
     success: false,
     message: "One or more products are invalid.",
@@ -167,8 +114,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    * Validate quantities and stock
    *
    * Stock is NOT deducted here.
-   * The order starts at WAITING_STOCK.
-   * Stock will be deducted when staff confirms
+   * Stock is deducted only when staff confirms
    * the order through the admin API.
    * --------------------------------------------------
    */
@@ -192,14 +138,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
    }
 
-   /*
-    * We still check stock at checkout
-    * so customers cannot place obviously
-    * impossible orders.
-    *
-    * However, stock is not reserved/deducted
-    * until the order is confirmed.
-    */
    if (product.quantity < quantity) {
     return res.status(400).json({
      success: false,
@@ -210,40 +148,194 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   /*
    * --------------------------------------------------
-   * Get initial order status
+   * Find initial order status
    * --------------------------------------------------
    */
 
   const initialStatus = await OrderStatus.findOne({
-   storeId,
-   code: "WAITING_STOCK",
+   code: "NEW",
    isActive: true,
   }).lean();
 
   if (!initialStatus) {
    return res.status(500).json({
     success: false,
-    message: "Initial order status WAITING_STOCK was not found.",
+    message: "Initial order status NEW was not found.",
    });
   }
 
   /*
    * --------------------------------------------------
-   * Create order
+   * Start transaction
    * --------------------------------------------------
    */
 
   const session = await mongoose.startSession();
 
+  let orderId: mongoose.Types.ObjectId | null = null;
+
   try {
    session.startTransaction();
+
+   /*
+    * --------------------------------------------------
+    * Resolve affiliate
+    *
+    * Affiliate identity and store permission are
+    * verified by the server.
+    * --------------------------------------------------
+    */
+
+   const affiliateAttribution = await resolveAffiliate({
+    affiliateCode: typeof affiliateCode === "string" ? affiliateCode : "",
+    storeId,
+    session,
+   });
+
+   /*
+    * --------------------------------------------------
+    * Find or create customer
+    * --------------------------------------------------
+    */
+
+   let customerDoc = null;
+
+   if (typeof customerId === "string" && mongoose.Types.ObjectId.isValid(customerId)) {
+    customerDoc = await Customer.findOne({
+     _id: customerId,
+     storeId,
+     isActive: true,
+    }).session(session);
+   }
+
+   if (!customerDoc) {
+    const customerName = typeof customer?.name === "string" ? customer.name.trim() : typeof customer?.fullName === "string" ? customer.fullName.trim() : "";
+
+    const customerPhone = typeof customer?.phone === "string" ? customer.phone.trim() : "";
+
+    if (!customerName || !customerPhone) {
+     throw new Error("Customer name and phone are required.");
+    }
+
+    const normalizedName = customerName
+     .normalize("NFD")
+     .replace(/[\u0300-\u036f]/g, "")
+     .toLowerCase()
+     .trim();
+
+    customerDoc = await Customer.findOneAndUpdate(
+     {
+      storeId,
+      phone: customerPhone,
+     },
+     {
+      $set: {
+       name: customerName,
+       nameNormalized: normalizedName,
+       isActive: true,
+      },
+     },
+     {
+      new: true,
+      upsert: true,
+      setDefaultsOnInsert: true,
+      session,
+     },
+    );
+   }
+
+   if (!customerDoc) {
+    throw new Error("Unable to create customer.");
+   }
+
+   /*
+    * --------------------------------------------------
+    * Prepare order items using database prices
+    * --------------------------------------------------
+    */
+
+   const orderItems = items.map((item: any) => {
+    const product = productMap.get(item.productId)!;
+
+    const quantity = Number(item.quantity);
+
+    // Do not trust price or currency supplied by the client.
+    const price = Number(product.price);
+
+    if (!Number.isFinite(price) || price < 0) {
+     throw new Error(`Invalid price for product "${product.name}".`);
+    }
+
+    return {
+     productId: product._id,
+
+     productSnapshot: {
+      name: product.name,
+      sku: product.sku,
+      slug: product.slug || "",
+      image: product.images?.[0] || "",
+     },
+
+     quantity,
+
+     price,
+
+     subtotal: price * quantity,
+
+     currency: String(product.currency || currency || "VND").toUpperCase(),
+    };
+   });
+
+   /*
+    * --------------------------------------------------
+    * Calculate totals on the server
+    * --------------------------------------------------
+    */
+
+   const calculatedSubtotal = orderItems.reduce((sum, item) => sum + item.subtotal, 0);
+
+   const parsedShippingFee = Number(shippingFee);
+   const parsedDiscount = Number(discount);
+
+   if (!Number.isFinite(parsedShippingFee) || parsedShippingFee < 0 || !Number.isFinite(parsedDiscount) || parsedDiscount < 0) {
+    throw new Error("Invalid shipping fee or discount.");
+   }
+
+   if (parsedDiscount > calculatedSubtotal + parsedShippingFee) {
+    throw new Error("Discount cannot exceed the order amount.");
+   }
+
+   const calculatedTotal = Math.max(0, calculatedSubtotal + parsedShippingFee - parsedDiscount);
+
+   const orderCurrency = String(currency || orderItems[0]?.currency || "VND").toUpperCase();
+
+   /*
+    * --------------------------------------------------
+    * Validate payment method
+    * --------------------------------------------------
+    */
+
+   const allowedPaymentMethods = ["COD", "BANK_TRANSFER", "CREDIT_CARD", "DEBIT_CARD", "OTHER"];
+
+   if (!allowedPaymentMethods.includes(paymentMethod)) {
+    throw new Error("Invalid payment method.");
+   }
+
+   // Payment status must be controlled by the server.
+   const initialPaymentStatus = "PENDING";
+
+   /*
+    * --------------------------------------------------
+    * Create order
+    * --------------------------------------------------
+    */
 
    const orderNumber = `ORD-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
    const customerSnapshot = {
     name: customerDoc.name,
     phone: customerDoc.phone,
-    email: customer?.email || "",
+    email: typeof customer?.email === "string" ? customer.email.trim() : "",
    };
 
    const [order] = await Order.create(
@@ -255,9 +347,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       orderNumber,
 
-      /*
-       * NEW STATUS SYSTEM
-       */
       statusId: initialStatus._id,
 
       customerSnapshot,
@@ -270,26 +359,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
        postalCode: shippingAddress?.postalCode || "",
       },
 
-      subtotal: Number(subtotal) || 0,
+      subtotal: calculatedSubtotal,
 
-      shippingFee: Number(shippingFee) || 0,
+      shippingFee: parsedShippingFee,
 
-      discount: Number(discount) || 0,
+      discount: parsedDiscount,
 
-      total: Number(total) || 0,
+      total: calculatedTotal,
 
-      currency: String(currency || "").toUpperCase(),
+      currency: orderCurrency,
 
       paymentMethod,
-      paymentStatus,
+
+      paymentStatus: initialPaymentStatus,
 
       note: typeof note === "string" ? note.trim() : "",
 
       shippingMethod: typeof shippingMethod === "string" ? shippingMethod.trim() : "",
 
-      /*
-       * Guest order
-       */
+      // Affiliate attribution
+      affiliateId: affiliateAttribution?.affiliateId ?? null,
+
+      affiliateStoreId: affiliateAttribution?.affiliateStoreId ?? null,
+
+      affiliateCode: affiliateAttribution?.affiliateCode ?? "",
+
+      // Guest order
       createdBy: null,
      },
     ],
@@ -298,42 +393,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     },
    );
 
+   orderId = order._id;
+
    /*
     * --------------------------------------------------
     * Create order items
     * --------------------------------------------------
     */
 
-   const orderItems = items.map((item: any) => {
-    const product = productMap.get(item.productId)!;
+   const orderItemDocuments = orderItems.map((item) => ({
+    orderId: order._id,
+    ...item,
+   }));
 
-    const quantity = Number(item.quantity);
-
-    const price = Number(item.price ?? product.price);
-
-    return {
-     orderId: order._id,
-
-     productId: product._id,
-
-     productSnapshot: {
-      name: product.name,
-      sku: product.sku,
-      slug: product.slug,
-      image: product.images?.[0] || "",
-     },
-
-     quantity,
-
-     price,
-
-     subtotal: price * quantity,
-
-     currency: String(item.currency || product.currency).toUpperCase(),
-    };
-   });
-
-   await OrderItem.insertMany(orderItems, {
+   await OrderItem.insertMany(orderItemDocuments, {
     session,
    });
 
@@ -343,18 +416,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     * No Product.quantity update here.
     * No Inventory record here.
     *
-    * Stock is deducted only when:
-    *
-    * WAITING_STOCK
-    *      ↓
-    * PRIORITY
-    *      ↓
-    * WAITING_PRINT
-    *      ↓
-    * CONFIRMED
-    *
-    * The CONFIRMED transition is handled
-    * by /api/admin/orders/[id].ts.
+    * Stock is deducted only when the order reaches
+    * CONFIRMED through the admin order API.
     */
 
    await session.commitTransaction();
@@ -389,7 +452,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     order: createdOrder,
    });
   } catch (error) {
-   await session.abortTransaction();
+   if (session.inTransaction()) {
+    await session.abortTransaction();
+   }
+
    throw error;
   } finally {
    await session.endSession();
@@ -397,9 +463,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
  } catch (error: any) {
   console.error("Guest order API error:", error);
 
-  return res.status(500).json({
+  const message = typeof error?.message === "string" ? error.message : "Internal server error.";
+
+  const isAffiliateError = message === "Affiliate code is invalid or inactive." || message === "This affiliate is not active for this store.";
+
+  const isValidationError =
+   isAffiliateError ||
+   message.startsWith("Invalid ") ||
+   message.startsWith("Customer ") ||
+   message.startsWith("Unable to create customer") ||
+   message.startsWith("Not enough stock") ||
+   message.startsWith("Discount cannot");
+
+  return res.status(isValidationError ? 400 : 500).json({
    success: false,
-   message: error?.message || "Internal server error.",
+   message,
   });
  }
 }

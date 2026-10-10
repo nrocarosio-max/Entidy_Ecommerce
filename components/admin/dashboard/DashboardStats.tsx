@@ -17,9 +17,9 @@ interface DashboardStatsProps {
 }
 
 function formatMoney(amount: number, currency: string) {
- return new Intl.NumberFormat("en-US", {
+ return new Intl.NumberFormat("vi-VN", {
   style: "currency",
-  currency: currency || "USD",
+  currency: currency === "VNĐ" ? "VND" : currency || "VND",
   maximumFractionDigits: 0,
  }).format(amount);
 }
@@ -27,7 +27,7 @@ function formatMoney(amount: number, currency: string) {
 export default function DashboardStats({ stats }: DashboardStatsProps) {
  const totalRevenue = stats.revenue.reduce((sum, item) => sum + item.total, 0);
 
- const primaryCurrency = stats.revenue[0]?.currency || "USD";
+ const primaryCurrency = stats.revenue[0]?.currency || "VNĐ";
 
  const cards = [
   {

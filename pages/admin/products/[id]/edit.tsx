@@ -27,6 +27,7 @@ interface Product {
  costPrice: number | null;
  currency: string;
  images: string[];
+ tryOnImage: string;
  videos: string[];
  quantity: number;
  lowStockThreshold: number;
@@ -41,7 +42,7 @@ export default function EditProductPage() {
  const { id } = router.query;
 
  const [product, setProduct] = useState<Product | null>(null);
-
+ const [tryOnImage, setTryOnImage] = useState("");
  const [categories, setCategories] = useState<Category[]>([]);
 
  const [brands, setBrands] = useState<Brand[]>([]);
@@ -51,7 +52,7 @@ export default function EditProductPage() {
 
  const [uploadingImages, setUploadingImages] = useState(false);
  const [uploadingVideos, setUploadingVideos] = useState(false);
-
+ const [uploadingTryOnImage, setUploadingTryOnImage] = useState(false);
  const [error, setError] = useState("");
 
  const [form, setForm] = useState({
@@ -96,7 +97,7 @@ export default function EditProductPage() {
    const currentProduct = productData.product;
 
    setProduct(currentProduct);
-
+   setTryOnImage(currentProduct.tryOnImage || "");
    setForm({
     name: currentProduct.name || "",
     slug: currentProduct.slug || "",
@@ -234,7 +235,44 @@ export default function EditProductPage() {
    }
   }
  }
+ async function uploadTryOnImage(file: File | null) {
+  if (!file) {
+   return;
+  }
 
+  try {
+   setUploadingTryOnImage(true);
+   setError("");
+
+   const formData = new FormData();
+
+   formData.append("file", file);
+
+   const response = await fetch("/api/admin/upload", {
+    method: "POST",
+    body: formData,
+   });
+
+   const data = await response.json();
+
+   if (!response.ok || !data?.url) {
+    throw new Error(data?.message || "Failed to upload Try-On image.");
+   }
+
+   if (data.resourceType !== "image") {
+    throw new Error("The uploaded Try-On file is not a valid image.");
+   }
+
+   setTryOnImage(data.url);
+  } catch (error) {
+   setError(error instanceof Error ? error.message : "Failed to upload Try-On image.");
+  } finally {
+   setUploadingTryOnImage(false);
+  }
+ }
+ function removeTryOnImage() {
+  setTryOnImage("");
+ }
  function removeImage(index: number) {
   setForm((current) => ({
    ...current,
@@ -287,7 +325,7 @@ export default function EditProductPage() {
      currency: form.currency.trim().toUpperCase(),
 
      images: form.images,
-
+     tryOnImage: tryOnImage,
      videos: form.videos,
 
      quantity: Number(form.quantity),
@@ -574,7 +612,66 @@ export default function EditProductPage() {
       <div className="rounded-xl border border-dashed border-gray-300 px-6 py-10 text-center text-sm text-gray-400">No product images.</div>
      )}
     </div>
+    {/* =====================================================
+        VIRTUAL TRY-ON
+    ====================================================== */}
 
+    <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+     <div className="mb-5 flex items-center justify-between gap-4">
+      <div>
+       <h2 className="text-lg font-semibold text-gray-900">Virtual Try-On</h2>
+
+       <p className="mt-1 text-xs text-gray-400">Upload a separate image for AI virtual try-on.</p>
+      </div>
+
+      <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-gray-800">
+       <FaCloudUploadAlt size={14} />
+
+       {uploadingTryOnImage ? "Uploading..." : "Upload Try-On Image"}
+
+       <input
+        type="file"
+        accept="image/*"
+        className="hidden"
+        disabled={uploadingTryOnImage}
+        onChange={(event) => {
+         const file = event.target.files?.[0] || null;
+
+         uploadTryOnImage(file);
+
+         event.target.value = "";
+        }}
+       />
+      </label>
+     </div>
+
+     <div className="mb-5 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
+      <p className="text-sm font-medium text-blue-900">About Try-On Image</p>
+
+      <p className="mt-1 text-xs leading-5 text-blue-700">
+       This image is used by the AI virtual try-on feature. It should contain the product garment clearly and preferably without a person wearing it.
+      </p>
+     </div>
+
+     {tryOnImage ? (
+      <div className="max-w-sm">
+       <div className="group relative overflow-hidden rounded-xl border border-gray-200 bg-gray-50">
+        <img src={tryOnImage} alt="Virtual Try-On" className="h-80 w-full object-contain" />
+
+        <button
+         type="button"
+         onClick={removeTryOnImage}
+         className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-lg bg-black/70 text-white opacity-0 transition group-hover:opacity-100 hover:bg-red-600">
+         <FaTrash size={12} />
+        </button>
+       </div>
+
+       <p className="mt-2 text-xs text-gray-400">This image will be used for AI virtual try-on.</p>
+      </div>
+     ) : (
+      <div className="rounded-xl border border-dashed border-gray-300 px-6 py-10 text-center text-sm text-gray-400">No Try-On image uploaded.</div>
+     )}
+    </div>
     {/* =====================================================
             VIDEOS
         ====================================================== */}
@@ -689,7 +786,7 @@ export default function EditProductPage() {
 
      <button
       type="submit"
-      disabled={saving || uploadingImages || uploadingVideos}
+      disabled={saving || uploadingImages || uploadingTryOnImage || uploadingVideos}
       className="inline-flex items-center gap-2 rounded-xl bg-gray-900 px-6 py-3 text-sm font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50">
       <FaSave size={13} />
 

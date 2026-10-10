@@ -112,6 +112,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     costPrice,
     currency,
     images,
+    tryOnImage,
     videos,
     quantity,
     lowStockThreshold,
@@ -189,29 +190,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
    /*
     * ==========================================================
-    * CHECK DUPLICATE SKU / SLUG
+    * CHECK DUPLICATE SKU
     * ==========================================================
+    *
+    * SKU must be unique inside the same store.
+    *
+    * Exclude the current product from the query.
     */
 
-   const duplicateProduct = await Product.findOne({
+   const existingSku = await Product.findOne({
     storeId: product.storeId,
+    sku: normalizedSku,
     _id: {
      $ne: product._id,
     },
-    $or: [
-     {
-      sku: normalizedSku,
-     },
-     {
-      slug: normalizedSlug,
-     },
-    ],
    }).lean();
 
-   if (duplicateProduct) {
+   if (existingSku) {
     return res.status(409).json({
      success: false,
-     message: "A product with this SKU or slug already exists in this store.",
+     message: "A product with this SKU already exists in this store.",
+    });
+   }
+
+   /*
+    * ==========================================================
+    * CHECK DUPLICATE SLUG
+    * ==========================================================
+    *
+    * Slug must be unique inside the same store.
+    *
+    * The same slug is allowed in different stores.
+    *
+    * Exclude the current product from the query.
+    */
+
+   const existingSlug = await Product.findOne({
+    storeId: product.storeId,
+    slug: normalizedSlug,
+    _id: {
+     $ne: product._id,
+    },
+   }).lean();
+
+   if (existingSlug) {
+    return res.status(409).json({
+     success: false,
+     message: "A product with this slug already exists in this store.",
     });
    }
 
@@ -364,6 +389,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
    /*
     * ==========================================================
+    * NORMALIZE TRY-ON IMAGE
+    * ==========================================================
+    *
+    * If tryOnImage is not included in the request,
+    * keep the existing tryOnImage.
+    *
+    * If tryOnImage is an empty string,
+    * the Try-On image will be removed.
+    */
+
+   const normalizedTryOnImage = tryOnImage === undefined ? product.tryOnImage || "" : typeof tryOnImage === "string" ? tryOnImage.trim() : "";
+
+   /*
+    * ==========================================================
     * NORMALIZE VIDEOS
     * ==========================================================
     *
@@ -411,6 +450,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
    product.currency = normalizedCurrency;
 
    product.images = normalizedImages;
+
+   product.tryOnImage = normalizedTryOnImage;
 
    product.videos = normalizedVideos;
 
@@ -497,6 +538,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   });
  } catch (error) {
   console.error("PRODUCT [ID] API ERROR:", error);
+
+  /*
+   * MongoDB duplicate key error.
+   *
+   * This is an additional safety net in case two requests
+   * attempt to create/update the same SKU or slug concurrently.
+   */
+  if (error && typeof error === "object" && "code" in error && (error as { code?: number }).code === 11000) {
+   const duplicateError = error as {
+    keyPattern?: Record<string, unknown>;
+   };
+
+   if (duplicateError.keyPattern?.sku) {
+    return res.status(409).json({
+     success: false,
+     message: "A product with this SKU already exists in this store.",
+    });
+   }
+
+   if (duplicateError.keyPattern?.slug) {
+    return res.status(409).json({
+     success: false,
+     message: "A product with this slug already exists in this store.",
+    });
+   }
+
+   return res.status(409).json({
+    success: false,
+    message: "A product with the same unique value already exists in this store.",
+   });
+  }
 
   if (error instanceof Error) {
    if (error.message === "UNAUTHORIZED") {

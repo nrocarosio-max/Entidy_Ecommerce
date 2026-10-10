@@ -1,67 +1,159 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { FaEye, FaSearch, FaShoppingBag, FaPlus } from "react-icons/fa";
+import {
+ FaBox,
+ FaCalendarAlt,
+ FaCheckCircle,
+ FaChevronLeft,
+ FaChevronRight,
+ FaEye,
+ FaFilter,
+ FaMapMarkerAlt,
+ FaMoneyBillWave,
+ FaSearch,
+ FaShoppingBag,
+ FaSyncAlt,
+ FaTimes,
+ FaTimesCircle,
+ FaTruck,
+} from "react-icons/fa";
 
 interface Store {
  _id: string;
- name: string;
- slug?: string;
+ name?: string;
+ storeName?: string;
 }
 
 interface Customer {
+ _id?: string;
+ name?: string;
+ phone?: string;
+ email?: string;
+}
+
+interface OrderStatusOption {
+ id: string;
+ code: string;
+ name: string;
+ color?: string;
+ icon?: string;
+ sortOrder?: number;
+ count?: number;
+}
+
+interface PopulatedNextStatus {
  _id: string;
  name: string;
- phone: string;
+ code: string;
+ color?: string;
  isActive?: boolean;
 }
 
+interface OrderStatVNĐata {
+ _id: string;
+ name: string;
+ code: string;
+ description?: string;
+ color?: string;
+ icon?: string;
+ sortOrder?: number;
+ isInitial?: boolean;
+ isFinal?: boolean;
+ isActive?: boolean;
+ nextStatusIds?: Array<string | PopulatedNextStatus>;
+}
+
+interface ShippingAddress {
+ address?: string;
+ ward?: string;
+ district?: string;
+ province?: string;
+ postalCode?: string;
+}
+
+interface OrderItemDetail {
+ _id: string;
+ productId?:
+  | {
+     _id?: string;
+     name?: string;
+     sku?: string;
+     images?: {
+      main?: string;
+     };
+    }
+  | string;
+ productSnapshot?: {
+  name?: string;
+  sku?: string;
+  slug?: string;
+  image?: string;
+ };
+ quantity: number;
+ price: number;
+ subtotal: number;
+ currency: string;
+}
+
+interface OrderHistoryItem {
+ _id: string;
+ fromStatusName?: string;
+ toStatusName?: string;
+ fromStatusId?: {
+  name?: string;
+  color?: string;
+ };
+ toStatusId?: {
+  name?: string;
+  color?: string;
+ };
+ changedBy?: {
+  name?: string;
+  email?: string;
+ };
+ note?: string;
+ createdAt?: string;
+}
+interface PaymentStatusHistoryItem {
+ _id: string;
+ fromPaymentStatus?: string;
+ toPaymentStatus?: string;
+ changedBy?: {
+  name?: string;
+  email?: string;
+ };
+ note?: string;
+ createdAt?: string;
+}
 interface Order {
  _id: string;
- storeId: string | Store;
- customerId: string | Customer;
- orderNumber: string;
-
- customerSnapshot: {
-  name: string;
-  phone: string;
-  email: string;
- };
-
- shippingAddress: {
-  province: string;
-  district: string;
-  ward: string;
-  address: string;
-  postalCode: string;
- };
-
- subtotal: number;
- shippingFee: number;
- discount: number;
- total: number;
- currency: string;
-
- paymentMethod: string;
- paymentStatus: string;
-
- status: string;
-
- note: string;
- shippingMethod: string;
- trackingNumber: string;
-
- createdBy:
-  | string
+ orderNumber?: string;
+ storeId?: string | { _id: string; name?: string; slug?: string };
+ customerId?: Customer | string | null;
+ customerSnapshot?: Customer;
+ statusId?: OrderStatVNĐata | string | null;
+ paymentMethod?: string;
+ paymentStatus?: string;
+ currency?: string;
+ subtotal?: number;
+ shippingFee?: number;
+ discount?: number;
+ total?: number;
+ shippingAddress?: ShippingAddress;
+ shippingMethod?: string;
+ trackingNumber?: string;
+ note?: string;
+ createdAt?: string;
+ updatedAt?: string;
+ createdBy?:
   | {
-     _id: string;
-     name: string;
-     email: string;
+     name?: string;
+     email?: string;
     }
+  | string
   | null;
-
- createdAt: string;
- updatedAt: string;
+ customer?: Customer;
 }
 
 interface Pagination {
@@ -71,819 +163,1477 @@ interface Pagination {
  totalPages: number;
 }
 
+interface Summary {
+ totalOrders: number;
+ totalAmount: number;
+}
+
 interface OrdersResponse {
- orders: Order[];
- pagination: Pagination;
-
- summary?: {
-  totalOrders: number;
-  totalAmount: number;
-  statusCounts?: Record<string, number>;
- };
+ success: boolean;
+ message?: string;
+ orders?: Order[];
+ stores?: Store[];
+ pagination?: Pagination;
+ summary?: Summary;
+ statusSummary?: OrderStatusOption[];
 }
 
-const statusLabels: Record<string, string> = {
- PENDING: "Mới",
- CONFIRMED: "Đã xác nhận",
- PROCESSING: "Đang xử lý",
- SHIPPED: "Đang giao",
- DELIVERED: "Đã giao",
- CANCELLED: "Đã hủy",
- RETURNED: "Đã trả hàng",
-};
+interface OrderDetailResponse {
+ success: boolean;
+ message?: string;
+ order?: Order;
+ items?: OrderItemDetail[];
+ history?: OrderHistoryItem[];
+ paymentHistory?: PaymentStatusHistoryItem[];
+}
 
-const statusOptions = [
- {
-  value: "",
-  label: "Tất cả trạng thái",
- },
- {
-  value: "PENDING",
-  label: "Mới",
- },
- {
-  value: "CONFIRMED",
-  label: "Đã xác nhận",
- },
- {
-  value: "PROCESSING",
-  label: "Đang xử lý",
- },
- {
-  value: "SHIPPED",
-  label: "Đang giao",
- },
- {
-  value: "DELIVERED",
-  label: "Đã giao",
- },
- {
-  value: "CANCELLED",
-  label: "Đã hủy",
- },
- {
-  value: "RETURNED",
-  label: "Đã trả hàng",
- },
+const PAGE_SIZE = 20;
+
+const PAYMENT_STATUS_OPTIONS = [
+ { value: "", label: "All payment statuses" },
+ { value: "PENDING", label: "Pending" },
+ { value: "PAID", label: "Paid" },
+ { value: "FAILED", label: "Failed" },
+ { value: "REFUNDED", label: "Refunded" },
 ];
 
-const paymentStatusOptions = [
- {
-  value: "",
-  label: "Tất cả thanh toán",
- },
- {
-  value: "PENDING",
-  label: "Chờ thanh toán",
- },
- {
-  value: "PAID",
-  label: "Đã thanh toán",
- },
- {
-  value: "FAILED",
-  label: "Thanh toán thất bại",
- },
- {
-  value: "REFUNDED",
-  label: "Đã hoàn tiền",
- },
-];
+const formatPrice = (amount: number, currency = "VNĐ") => {
+ const value = Number(amount || 0);
 
-/*
- * Only these transitions are allowed.
- * The backend also validates this,
- * so frontend validation is only for better UX.
- */
-const allowedTransitions: Record<string, string[]> = {
- PENDING: ["CONFIRMED", "CANCELLED"],
- CONFIRMED: ["PROCESSING", "CANCELLED"],
- PROCESSING: ["SHIPPED", "CANCELLED"],
- SHIPPED: ["DELIVERED", "RETURNED"],
- DELIVERED: ["RETURNED"],
- CANCELLED: [],
- RETURNED: [],
+ return `${currency} ${value.toLocaleString("en-US", {
+  maximumFractionDigits: 2,
+ })}`;
 };
 
-function getStatusLabel(status: string) {
- return statusLabels[status] || status;
-}
+const formatDate = (value?: string) => {
+ if (!value) return "—";
 
-function getStatusSelectClass(status: string) {
- switch (status) {
-  case "PENDING":
-   return "border-yellow-300 bg-yellow-50 text-yellow-700";
+ const date = new Date(value);
 
-  case "CONFIRMED":
-   return "border-blue-300 bg-blue-50 text-blue-700";
+ if (Number.isNaN(date.getTime())) return "—";
 
-  case "PROCESSING":
-   return "border-purple-300 bg-purple-50 text-purple-700";
+ return date.toLocaleString("en-GB", {
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+ });
+};
 
-  case "SHIPPED":
-   return "border-indigo-300 bg-indigo-50 text-indigo-700";
-
-  case "DELIVERED":
-   return "border-green-300 bg-green-50 text-green-700";
-
-  case "CANCELLED":
-   return "border-red-300 bg-red-50 text-red-700";
-
-  case "RETURNED":
-   return "border-orange-300 bg-orange-50 text-orange-700";
-
-  default:
-   return "border-gray-300 bg-gray-50 text-gray-700";
+const getCustomer = (order: Order): Customer => {
+ if (order.customerSnapshot) {
+  return order.customerSnapshot;
  }
-}
 
-function getPaymentStatusClass(status: string) {
- switch (status) {
+ if (order.customer && typeof order.customer === "object") {
+  return order.customer;
+ }
+
+ if (order.customerId && typeof order.customerId === "object") {
+  return order.customerId;
+ }
+
+ return {};
+};
+
+const getOrderStatus = (order: Order): OrderStatVNĐata | null => {
+ if (order.statusId && typeof order.statusId === "object") {
+  return order.statusId;
+ }
+
+ return null;
+};
+
+const getForwardStatuses = (currentStatus: OrderStatVNĐata | null, statuses: OrderStatusOption[]): OrderStatusOption[] => {
+ if (!currentStatus) {
+  return statuses;
+ }
+
+ const allowedIds = new Set((currentStatus.nextStatusIds || []).map((status) => (typeof status === "string" ? status : status._id)));
+
+ return statuses
+  .filter((status) => status.id !== currentStatus._id && (!currentStatus.nextStatusIds || allowedIds.size === 0 || allowedIds.has(status.id)))
+  .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+};
+
+const getStatusId = (status: string | PopulatedNextStatus): string => {
+ return typeof status === "string" ? status : status._id;
+};
+
+const getPaymentStatusStyle = (status?: string) => {
+ switch ((status || "PENDING").toUpperCase()) {
   case "PAID":
-   return "bg-green-100 text-green-700";
-
+   return "bg-emerald-50 text-emerald-700";
   case "FAILED":
-   return "bg-red-100 text-red-700";
-
+   return "bg-red-50 text-red-700";
   case "REFUNDED":
-   return "bg-orange-100 text-orange-700";
-
-  case "PENDING":
-   return "bg-yellow-100 text-yellow-700";
-
+  case "PARTIALLY_REFUNDED":
+   return "bg-purple-50 text-purple-700";
   default:
-   return "bg-gray-100 text-gray-600";
+   return "bg-amber-50 text-amber-700";
  }
-}
+};
 
-function getPaymentStatusLabel(status: string) {
- switch (status) {
-  case "PAID":
-   return "Đã thanh toán";
-
-  case "FAILED":
-   return "Thất bại";
-
-  case "REFUNDED":
-   return "Đã hoàn tiền";
-
-  case "PENDING":
-   return "Chờ thanh toán";
-
-  default:
-   return status;
+const getStoreName = (order: Order, fallback = "—") => {
+ if (order.storeId && typeof order.storeId === "object") {
+  return order.storeId.name || fallback;
  }
-}
 
-function formatMoney(value: number, currency: string) {
- try {
-  return new Intl.NumberFormat("vi-VN", {
-   style: "currency",
-   currency: currency || "VND",
-   maximumFractionDigits: 0,
-  }).format(value);
- } catch {
-  return `${value.toLocaleString("vi-VN")} ${currency || ""}`;
+ return fallback;
+};
+
+const getCreatedByName = (order: Order) => {
+ if (order.createdBy && typeof order.createdBy === "object") {
+  return order.createdBy.name || order.createdBy.email || "—";
  }
-}
+
+ return "—";
+};
 
 export default function OrdersPage() {
- const { data: session, status } = useSession();
+ const { data: session, status: sessionStatus } = useSession();
 
- const [stores, setStores] = useState<Store[]>([]);
- const [selectedStore, setSelectedStore] = useState("");
+ const user = session?.user as
+  | {
+     role?: string;
+     storeId?: string;
+    }
+  | undefined;
+
+ const isSuperAdmin = user?.role === "SUPER_ADMIN";
 
  const [orders, setOrders] = useState<Order[]>([]);
+ const [stores, setStores] = useState<Store[]>([]);
+ const [statusOptions, setStatusOptions] = useState<OrderStatusOption[]>([]);
 
+ const [selectedStoreId, setSelectedStoreId] = useState("");
+ const [selectedStatusId, setSelectedStatusId] = useState("");
+ const [selectedPaymentStatus, setSelectedPaymentStatus] = useState("");
+ const [search, setSearch] = useState("");
+ const [dateFrom, setDateFrom] = useState("");
+ const [dateTo, setDateTo] = useState("");
+
+ const [page, setPage] = useState(1);
  const [pagination, setPagination] = useState<Pagination>({
   page: 1,
-  limit: 20,
+  limit: PAGE_SIZE,
   total: 0,
-  totalPages: 1,
+  totalPages: 0,
  });
 
- const [summary, setSummary] = useState({
+ const [summary, setSummary] = useState<Summary>({
   totalOrders: 0,
   totalAmount: 0,
  });
 
- const [searchInput, setSearchInput] = useState("");
- const [search, setSearch] = useState("");
-
- const [orderStatus, setOrderStatus] = useState("");
- const [paymentStatus, setPaymentStatus] = useState("");
-
- const [fromDate, setFromDate] = useState("");
- const [toDate, setToDate] = useState("");
-
- const [loadingStores, setLoadingStores] = useState(false);
- const [loadingOrders, setLoadingOrders] = useState(false);
-
+ const [loading, setLoading] = useState(true);
  const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
-
+ const [updatingPaymentOrderId, setUpdatingPaymentOrderId] = useState<string | null>(null);
+ const [savingDetailPaymentStatus, setSavingDetailPaymentStatus] = useState(false);
  const [error, setError] = useState("");
- const [success, setSuccess] = useState("");
+ const [notice, setNotice] = useState("");
 
- const isSuperAdmin = session?.user?.role === "SUPER_ADMIN";
+ const [detailOrder, setDetailOrder] = useState<Order | null>(null);
+ const [detailItems, setDetailItems] = useState<OrderItemDetail[]>([]);
+ const [detailHistory, setDetailHistory] = useState<OrderHistoryItem[]>([]);
+ const [detailPaymentHistory, setDetailPaymentHistory] = useState<PaymentStatusHistoryItem[]>([]);
+ const [detailLoading, setDetailLoading] = useState(false);
+ const [detailStatusId, setDetailStatusId] = useState("");
+ const [detailNote, setDetailNote] = useState("");
+ const [savingDetailStatus, setSavingDetailStatus] = useState(false);
+ const [detailPaymentStatus, setDetailPaymentStatus] = useState("PENDING");
+ const selectedStore = useMemo(() => stores.find((store) => store._id === selectedStoreId), [stores, selectedStoreId]);
+ const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null);
 
- /*
-  * Load stores for SUPER_ADMIN
-  */
+ const handleDeleteOrder = async (orderId: string) => {
+  const confirmed = window.confirm("Bạn có chắc chắn muốn chuyển đơn hàng này vào danh sách đã xóa không?");
+
+  if (!confirmed) return;
+
+  setDeletingOrderId(orderId);
+  setError("");
+  setNotice("");
+
+  try {
+   const response = await fetch(`/api/admin/orders/${orderId}`, {
+    method: "DELETE",
+   });
+
+   const result = await response.json();
+
+   if (!response.ok || !result.success) {
+    throw new Error(result.message || "Unable to delete order.");
+   }
+
+   setOrders((currentOrders) => currentOrders.filter((order) => order._id !== orderId));
+
+   setNotice(result.message || "Order moved to deleted orders.");
+
+   // Nếu đơn cuối cùng trên trang bị xóa, chuyển về trang trước.
+   if (orders.length === 1 && page > 1) {
+    setPage((currentPage) => currentPage - 1);
+   }
+  } catch (err) {
+   setError(err instanceof Error ? err.message : "Unable to delete order.");
+  } finally {
+   setDeletingOrderId(null);
+  }
+ };
  useEffect(() => {
-  if (status !== "authenticated") return;
-  if (!isSuperAdmin) return;
+  if (sessionStatus !== "authenticated") return;
+
+  if (!isSuperAdmin) {
+   if (user?.storeId) {
+    setSelectedStoreId(user.storeId);
+   } else {
+    setError("Your account is not assigned to a store.");
+    setLoading(false);
+   }
+
+   return;
+  }
+
+  let cancelled = false;
 
   const loadStores = async () => {
    try {
-    setLoadingStores(true);
-    setError("");
-
     const response = await fetch("/api/admin/stores");
-
-    const data = await response.json().catch(() => null);
+    const result = await response.json();
 
     if (!response.ok) {
-     throw new Error(data?.message || "Failed to load stores.");
+     throw new Error(result.message || "Unable to load stores.");
     }
 
-    const storeList: Store[] = data.stores || [];
+    const storeList: Store[] = Array.isArray(result.stores) ? result.stores : Array.isArray(result.data) ? result.data : [];
 
-    setStores(storeList);
+    if (!cancelled) {
+     setStores(storeList);
 
-    if (storeList.length > 0) {
-     setSelectedStore((current) => {
-      return current || storeList[0]._id;
+     setSelectedStoreId((current) => {
+      if (current && storeList.some((store) => store._id === current)) {
+       return current;
+      }
+
+      return storeList[0]?._id || "";
      });
     }
    } catch (err) {
-    setError(err instanceof Error ? err.message : "Failed to load stores.");
-   } finally {
-    setLoadingStores(false);
+    if (!cancelled) {
+     setError(err instanceof Error ? err.message : "Unable to load stores.");
+     setLoading(false);
+    }
    }
   };
 
-  loadStores();
- }, [status, isSuperAdmin]);
+  void loadStores();
 
- /*
-  * Set store for non-SUPER_ADMIN
-  */
- useEffect(() => {
-  if (status !== "authenticated") return;
-
-  if (!isSuperAdmin && session?.user?.storeId) {
-   setSelectedStore(session.user.storeId);
-  }
- }, [status, isSuperAdmin, session?.user?.storeId]);
-
- /*
-  * Load orders
-  */
- useEffect(() => {
-  if (status !== "authenticated") return;
-  if (!selectedStore) return;
-
-  const loadOrders = async () => {
-   try {
-    setLoadingOrders(true);
-    setError("");
-
-    const params = new URLSearchParams({
-     storeId: selectedStore,
-     page: String(pagination.page),
-     limit: "20",
-    });
-
-    if (search.trim()) {
-     params.set("search", search.trim());
-    }
-
-    if (orderStatus) {
-     params.set("status", orderStatus);
-    }
-
-    if (paymentStatus) {
-     params.set("paymentStatus", paymentStatus);
-    }
-
-    if (fromDate) {
-     params.set("fromDate", fromDate);
-    }
-
-    if (toDate) {
-     params.set("toDate", toDate);
-    }
-
-    const response = await fetch(`/api/admin/orders?${params.toString()}`);
-
-    const data = await response.json().catch(() => null);
-
-    if (!response.ok) {
-     throw new Error(data?.message || "Failed to load orders.");
-    }
-
-    const result: OrdersResponse = data;
-
-    setOrders(result.orders || []);
-
-    if (result.pagination) {
-     setPagination(result.pagination);
-    }
-
-    if (result.summary) {
-     setSummary({
-      totalOrders: result.summary.totalOrders || 0,
-      totalAmount: result.summary.totalAmount || 0,
-     });
-    } else {
-     setSummary({
-      totalOrders: result.pagination?.total || 0,
-      totalAmount: 0,
-     });
-    }
-   } catch (err) {
-    setError(err instanceof Error ? err.message : "Failed to load orders.");
-   } finally {
-    setLoadingOrders(false);
-   }
+  return () => {
+   cancelled = true;
   };
+ }, [sessionStatus, isSuperAdmin, user?.storeId]);
 
-  loadOrders();
- }, [status, selectedStore, search, orderStatus, paymentStatus, fromDate, toDate, pagination.page]);
+ const loadOrders = useCallback(async () => {
+  if (sessionStatus !== "authenticated") return;
 
- /*
-  * Search
-  */
- const handleSearch = () => {
-  setPagination((current) => ({
-   ...current,
-   page: 1,
-  }));
-
-  setSearch(searchInput.trim());
- };
-
- /*
-  * Reset filters
-  */
- const handleReset = () => {
-  setSearchInput("");
-  setSearch("");
-  setOrderStatus("");
-  setPaymentStatus("");
-  setFromDate("");
-  setToDate("");
-
-  setPagination((current) => ({
-   ...current,
-   page: 1,
-  }));
- };
-
- /*
-  * Update order status directly from table.
-  */
- const handleStatusChange = async (order: Order, newStatus: string) => {
-  if (newStatus === order.status) {
+  if (isSuperAdmin && !selectedStoreId) {
+   setOrders([]);
+   setLoading(false);
    return;
   }
 
-  const allowed = allowedTransitions[order.status] || [];
-
-  if (!allowed.includes(newStatus)) {
-   setError(`Không thể chuyển đơn từ "${getStatusLabel(order.status)}" sang "${getStatusLabel(newStatus)}".`);
-
+  if (!isSuperAdmin && !user?.storeId) {
+   setLoading(false);
    return;
   }
+
+  setLoading(true);
+  setError("");
 
   try {
-   setUpdatingOrderId(order._id);
-   setError("");
-   setSuccess("");
+   const params = new URLSearchParams();
 
+   params.set("storeId", isSuperAdmin ? selectedStoreId : user?.storeId || "");
+   params.set("page", String(page));
+   params.set("limit", String(PAGE_SIZE));
+
+   if (search.trim()) params.set("search", search.trim());
+   if (selectedStatusId) params.set("statusId", selectedStatusId);
+   if (selectedPaymentStatus) params.set("paymentStatus", selectedPaymentStatus);
+   if (dateFrom) params.set("dateFrom", dateFrom);
+   if (dateTo) params.set("dateTo", dateTo);
+
+   const response = await fetch(`/api/admin/orders?${params.toString()}`);
+   const result: OrdersResponse = await response.json();
+
+   if (!response.ok || !result.success) {
+    throw new Error(result.message || "Unable to load orders.");
+   }
+
+   setOrders(Array.isArray(result.orders) ? result.orders : []);
+
+   setPagination(
+    result.pagination || {
+     page,
+     limit: PAGE_SIZE,
+     total: 0,
+     totalPages: 0,
+    },
+   );
+
+   setSummary(
+    result.summary || {
+     totalOrders: 0,
+     totalAmount: 0,
+    },
+   );
+
+   setStatusOptions(Array.isArray(result.statusSummary) ? result.statusSummary : []);
+  } catch (err) {
+   setError(err instanceof Error ? err.message : "Unable to load orders.");
+   setOrders([]);
+  } finally {
+   setLoading(false);
+  }
+ }, [sessionStatus, isSuperAdmin, selectedStoreId, user?.storeId, page, search, selectedStatusId, selectedPaymentStatus, dateFrom, dateTo]);
+
+ useEffect(() => {
+  if (sessionStatus === "authenticated") {
+   void loadOrders();
+  }
+ }, [sessionStatus, loadOrders]);
+
+ useEffect(() => {
+  if (!detailOrder) return;
+
+  const previousOverflow = document.body.style.overflow;
+  document.body.style.overflow = "hidden";
+
+  const handleKeyDown = (event: KeyboardEvent) => {
+   if (event.key === "Escape" && !savingDetailStatus) {
+    setDetailOrder(null);
+   }
+  };
+
+  window.addEventListener("keydown", handleKeyDown);
+
+  return () => {
+   document.body.style.overflow = previousOverflow;
+   window.removeEventListener("keydown", handleKeyDown);
+  };
+ }, [detailOrder, savingDetailStatus]);
+
+ const resetFilters = () => {
+  setSearch("");
+  setSelectedStatusId("");
+  setSelectedPaymentStatus("");
+  setDateFrom("");
+  setDateTo("");
+  setPage(1);
+  setNotice("");
+ };
+
+ const handleStoreChange = (value: string) => {
+  setSelectedStoreId(value);
+  setPage(1);
+  setSelectedStatusId("");
+  setNotice("");
+ };
+
+ const handleStatusChange = async (order: Order, nextStatusId: string) => {
+  const currentStatus = getOrderStatus(order);
+
+  if (!nextStatusId || nextStatusId === currentStatus?._id) return;
+
+  setUpdatingOrderId(order._id);
+  setError("");
+  setNotice("");
+
+  try {
    const response = await fetch(`/api/admin/orders/${order._id}`, {
     method: "PATCH",
     headers: {
      "Content-Type": "application/json",
     },
     body: JSON.stringify({
-     status: newStatus,
+     statusId: nextStatusId,
+     note: "",
     }),
    });
 
-   const data = await response.json().catch(() => null);
+   const result: OrderDetailResponse = await response.json();
 
-   if (!response.ok) {
-    throw new Error(data?.message || "Không thể cập nhật trạng thái đơn hàng.");
+   if (!response.ok || !result.success || !result.order) {
+    throw new Error(result.message || "Unable to update order status.");
    }
 
-   const updatedOrder: Order = data.order || data;
+   const updatedOrder = result.order;
 
+   // Update only the order that changed.
    setOrders((currentOrders) =>
     currentOrders.map((item) =>
      item._id === order._id
       ? {
          ...item,
-         status: updatedOrder.status || newStatus,
-         updatedAt: updatedOrder.updatedAt || item.updatedAt,
+         statusId: updatedOrder.statusId,
+         updatedAt: updatedOrder.updatedAt,
         }
       : item,
     ),
    );
 
-   setSuccess(`Đơn ${order.orderNumber} đã chuyển sang "${getStatusLabel(newStatus)}".`);
-
-   /*
-    * Automatically hide success message.
-    */
-   window.setTimeout(() => {
-    setSuccess("");
-   }, 3000);
+   setNotice(result.message || "Order status updated successfully.");
   } catch (err) {
-   setError(err instanceof Error ? err.message : "Không thể cập nhật trạng thái đơn hàng.");
+   setError(err instanceof Error ? err.message : "Unable to update order status.");
   } finally {
    setUpdatingOrderId(null);
   }
  };
 
- if (status === "loading") {
-  return <div className="flex min-h-[60vh] items-center justify-center text-sm text-gray-500">Loading...</div>;
+ const handlePaymentStatusChange = async (order: Order, nextPaymentStatus: string): Promise<boolean> => {
+  const currentPaymentStatus = order.paymentStatus || "PENDING";
+
+  if (!nextPaymentStatus || nextPaymentStatus === currentPaymentStatus) {
+   return true;
+  }
+
+  setUpdatingPaymentOrderId(order._id);
+  setError("");
+  setNotice("");
+
+  try {
+   const response = await fetch(`/api/admin/orders/${order._id}`, {
+    method: "PATCH",
+    headers: {
+     "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+     paymentStatus: nextPaymentStatus,
+     note: "Payment status updated by administrator.",
+    }),
+   });
+
+   const result = await response.json();
+
+   if (!response.ok || !result.success) {
+    throw new Error(result.message || "Unable to update payment status.");
+   }
+
+   const savedPaymentStatus = result.order?.paymentStatus || nextPaymentStatus;
+
+   setOrders((currentOrders) => currentOrders.map((item) => (item._id === order._id ? { ...item, paymentStatus: savedPaymentStatus } : item)));
+
+   setDetailOrder((currentOrder) => (currentOrder?._id === order._id ? { ...currentOrder, paymentStatus: savedPaymentStatus } : currentOrder));
+
+   setDetailPaymentStatus(savedPaymentStatus);
+
+   if (Array.isArray(result.paymentHistory)) {
+    setDetailPaymentHistory(result.paymentHistory);
+   } else {
+    // Fallback: reload payment history from the order details endpoint.
+    try {
+     const historyResponse = await fetch(`/api/admin/orders/${order._id}`);
+     const historyResult: OrderDetailResponse = await historyResponse.json();
+
+     if (historyResponse.ok && historyResult.success) {
+      setDetailPaymentHistory(Array.isArray(historyResult.paymentHistory) ? historyResult.paymentHistory : []);
+     }
+    } catch (historyError) {
+     console.error("Unable to refresh payment history:", historyError);
+    }
+   }
+
+   setNotice(result.message || "Payment status updated successfully.");
+
+   return true;
+  } catch (err) {
+   setError(err instanceof Error ? err.message : "Unable to update payment status.");
+
+   return false;
+  } finally {
+   setUpdatingPaymentOrderId(null);
+  }
+ };
+
+ const openOrderDetail = async (orderId: string) => {
+  // Open the popup immediately so loading is visible.
+  setDetailOrder({
+   _id: orderId,
+   orderNumber: "Loading order...",
+  });
+
+  setDetailItems([]);
+  setDetailHistory([]);
+  setDetailPaymentHistory([]);
+  setDetailStatusId("");
+  setDetailNote("");
+  setDetailPaymentStatus("PENDING");
+  setDetailLoading(true);
+  setError("");
+  setNotice("");
+
+  try {
+   const response = await fetch(`/api/admin/orders/${orderId}`);
+   const result: OrderDetailResponse = await response.json();
+
+   if (!response.ok || !result.success || !result.order) {
+    throw new Error(result.message || `Unable to load order details (HTTP ${response.status}).`);
+   }
+
+   setDetailOrder(result.order);
+   setDetailItems(Array.isArray(result.items) ? result.items : []);
+   setDetailHistory(Array.isArray(result.history) ? result.history : []);
+   setDetailPaymentHistory(Array.isArray(result.paymentHistory) ? result.paymentHistory : []);
+
+   const status = result.order.statusId;
+
+   setDetailStatusId(status && typeof status === "object" ? status._id : typeof status === "string" ? status : "");
+
+   setDetailPaymentStatus(result.order.paymentStatus || "PENDING");
+  } catch (err) {
+   setDetailOrder(null);
+   setError(err instanceof Error ? err.message : "Unable to load order details.");
+   console.error("openOrderDetail error:", err);
+  } finally {
+   setDetailLoading(false);
+  }
+ };
+
+ const saveDetailStatus = async () => {
+  if (!detailOrder || !detailStatusId || savingDetailStatus) return;
+
+  const currentStatus = getOrderStatus(detailOrder);
+
+  if (detailStatusId === currentStatus?._id) {
+   setNotice("The selected status is already applied.");
+   return;
+  }
+
+  setSavingDetailStatus(true);
+  setError("");
+  setNotice("");
+
+  try {
+   const response = await fetch(`/api/admin/orders/${detailOrder._id}`, {
+    method: "PATCH",
+    headers: {
+     "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+     statusId: detailStatusId,
+     note: detailNote,
+    }),
+   });
+
+   const result = await response.json();
+
+   if (!response.ok || !result.success) {
+    throw new Error(result.message || "Unable to update order status.");
+   }
+
+   setNotice(result.message || "Order status updated successfully.");
+
+   const refreshedResponse = await fetch(`/api/admin/orders/${detailOrder._id}`);
+   const refreshed: OrderDetailResponse = await refreshedResponse.json();
+
+   if (!refreshedResponse.ok || !refreshed.success || !refreshed.order) {
+    throw new Error(refreshed.message || "Status saved, but order details could not be refreshed.");
+   }
+
+   setDetailOrder(refreshed.order);
+   setDetailItems(Array.isArray(refreshed.items) ? refreshed.items : []);
+   setDetailHistory(Array.isArray(refreshed.history) ? refreshed.history : []);
+   setDetailPaymentHistory(Array.isArray(refreshed.paymentHistory) ? refreshed.paymentHistory : []);
+
+   const updatedStatus = refreshed.order.statusId;
+
+   setDetailStatusId(updatedStatus && typeof updatedStatus === "object" ? updatedStatus._id : typeof updatedStatus === "string" ? updatedStatus : "");
+
+   setDetailNote("");
+   setOrders((currentOrders) =>
+    currentOrders.map((item) =>
+     item._id === refreshed.order!._id
+      ? {
+         ...item,
+         statusId: refreshed.order!.statusId,
+         updatedAt: refreshed.order!.updatedAt,
+        }
+      : item,
+    ),
+   );
+  } catch (err) {
+   setError(err instanceof Error ? err.message : "Unable to update order status.");
+  } finally {
+   setSavingDetailStatus(false);
+  }
+ };
+
+ const totalPages = Math.max(1, pagination.totalPages || Math.ceil(pagination.total / PAGE_SIZE));
+
+ if (sessionStatus === "loading") {
+  return (
+   <div className="flex min-h-[300px] items-center justify-center">
+    <FaSyncAlt className="animate-spin text-2xl text-gray-500" />
+   </div>
+  );
  }
 
- if (!session) {
-  return <div className="flex min-h-[60vh] items-center justify-center text-sm text-gray-500">Please sign in.</div>;
- }
+ const currentDetailStatus = detailOrder ? getOrderStatus(detailOrder) : null;
+
+ const detailNextStatuses = getForwardStatuses(currentDetailStatus, statusOptions);
 
  return (
-  <div className="min-h-screen bg-gray-100 p-4 md:p-6">
-   {/* Header */}
-   <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-    <div className="flex items-center gap-3">
-     <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gray-900 text-white">
-      <FaShoppingBag />
+  <div className="min-h-screen bg-gray-50 p-4 text-gray-800 sm:p-6 lg:p-8">
+   <div className="mx-auto max-w-[1600px] space-y-6">
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+     <div>
+      <p className="text-sm font-medium text-gray-500">Admin / Orders</p>
+      <h1 className="mt-1 text-2xl font-bold sm:text-3xl">Order Management</h1>
+      <p className="mt-2 text-sm text-gray-500">Review orders, payments, and order processing status.</p>
      </div>
 
-     <div>
-      <h1 className="text-2xl font-bold text-gray-900">Orders</h1>
+     <div className="flex flex-wrap gap-3">
+      <button
+       type="button"
+       onClick={() => void loadOrders()}
+       disabled={loading}
+       className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium hover:bg-gray-100 disabled:opacity-50">
+       <FaSyncAlt className={loading ? "animate-spin" : ""} />
+       Refresh
+      </button>
 
-      <p className="text-sm text-gray-500">Quản lý và xử lý đơn hàng</p>
+      <Link
+       href="/admin/orders/create"
+       className="inline-flex items-center justify-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-700">
+       <FaShoppingBag />
+       Create order
+      </Link>
      </div>
     </div>
 
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-     {/* Store selector */}
-     {isSuperAdmin && (
-      <div className="w-full sm:w-72">
-       <label className="mb-1 block text-sm font-medium text-gray-700">Store</label>
+    {isSuperAdmin && (
+     <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+      <label className="mb-2 block text-sm font-semibold">Store</label>
 
-       <select
-        value={selectedStore}
-        onChange={(event) => {
-         setSelectedStore(event.target.value);
+      <select
+       value={selectedStoreId}
+       onChange={(event) => handleStoreChange(event.target.value)}
+       className="w-full max-w-md rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-gray-500">
+       <option value="">Select a store</option>
+       {stores.map((store) => (
+        <option key={store._id} value={store._id}>
+         {store.name || store.storeName || store._id}
+        </option>
+       ))}
+      </select>
+     </div>
+    )}
 
-         setPagination((current) => ({
-          ...current,
-          page: 1,
-         }));
+    {selectedStore && isSuperAdmin && (
+     <p className="text-sm text-gray-500">
+      Showing orders for <span className="font-semibold text-gray-800">{selectedStore.name || selectedStore.storeName || "Selected store"}</span>
+     </p>
+    )}
+
+    {error && (
+     <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+      <FaTimesCircle className="mt-0.5 shrink-0" />
+      <div className="flex-1">{error}</div>
+      <button type="button" onClick={() => setError("")} aria-label="Dismiss error" className="text-red-500 hover:text-red-800">
+       <FaTimesCircle />
+      </button>
+     </div>
+    )}
+
+    {notice && (
+     <div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">
+      <FaCheckCircle className="mt-0.5 shrink-0" />
+      <div className="flex-1">{notice}</div>
+      <button type="button" onClick={() => setNotice("")} aria-label="Dismiss notice" className="text-emerald-600 hover:text-emerald-800">
+       <FaTimesCircle />
+      </button>
+     </div>
+    )}
+
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+     <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <div className="flex items-center justify-between">
+       <div>
+        <p className="text-sm text-gray-500">Total orders</p>
+        <p className="mt-2 text-2xl font-bold">{summary.totalOrders.toLocaleString("en-US")}</p>
+       </div>
+       <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50 text-xl text-blue-600">
+        <FaBox />
+       </div>
+      </div>
+     </div>
+
+     <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <div className="flex items-center justify-between">
+       <div>
+        <p className="text-sm text-gray-500">Total order value</p>
+        <p className="mt-2 text-2xl font-bold">{formatPrice(summary.totalAmount)}</p>
+       </div>
+       <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-50 text-xl text-emerald-600">
+        <FaMoneyBillWave />
+       </div>
+      </div>
+     </div>
+
+     <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <div className="flex items-center justify-between">
+       <div>
+        <p className="text-sm text-gray-500">Statuses available</p>
+        <p className="mt-2 text-2xl font-bold">{statusOptions.length}</p>
+       </div>
+       <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-purple-50 text-xl text-purple-600">
+        <FaTruck />
+       </div>
+      </div>
+     </div>
+    </div>
+
+    {statusOptions.length > 0 && (
+     <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+      <div className="mb-3 flex items-center gap-2">
+       <FaFilter className="text-gray-500" />
+       <h2 className="font-semibold">Order status overview</h2>
+      </div>
+
+      <div className="flex gap-3 overflow-x-auto pb-2">
+       <button
+        type="button"
+        onClick={() => {
+         setSelectedStatusId("");
+         setPage(1);
         }}
-        disabled={loadingStores}
-        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-gray-900">
-        <option value="">{loadingStores ? "Loading stores..." : "Select store"}</option>
+        className={`min-w-[130px] rounded-lg border p-3 text-left transition ${
+         selectedStatusId === "" ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white hover:bg-gray-50"
+        }`}>
+        <p className="text-xs opacity-80">All statuses</p>
+        <p className="mt-1 text-xl font-bold">{summary.totalOrders}</p>
+       </button>
 
-        {stores.map((store) => (
-         <option key={store._id} value={store._id}>
-          {store.name}
+       {statusOptions.map((status) => {
+        const active = selectedStatusId === status.id;
+
+        return (
+         <button
+          key={status.id}
+          type="button"
+          onClick={() => {
+           setSelectedStatusId(active ? "" : status.id);
+           setPage(1);
+          }}
+          className={`min-w-[150px] rounded-lg border p-3 text-left transition ${
+           active ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white hover:bg-gray-50"
+          }`}>
+          <div className="flex items-center gap-2">
+           <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: status.color || "#6B7280" }} />
+           <span className="text-sm font-medium">{status.name}</span>
+          </div>
+          <p className="mt-2 text-xl font-bold">{status.count || 0}</p>
+         </button>
+        );
+       })}
+      </div>
+     </div>
+    )}
+
+    <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
+     <div className="mb-4 flex items-center gap-2">
+      <FaFilter className="text-gray-500" />
+      <h2 className="font-semibold">Filters</h2>
+     </div>
+
+     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-6">
+      <div className="sm:col-span-2">
+       <label className="mb-1.5 block text-xs font-semibold text-gray-600">Search orders</label>
+       <div className="relative">
+        <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        <input
+         type="search"
+         value={search}
+         onChange={(event) => {
+          setSearch(event.target.value);
+          setPage(1);
+         }}
+         placeholder="Order number, customer, phone..."
+         className="w-full rounded-lg border border-gray-300 py-2.5 pl-9 pr-3 text-sm outline-none focus:border-gray-500"
+        />
+       </div>
+      </div>
+
+      <div>
+       <label className="mb-1.5 block text-xs font-semibold text-gray-600">Order status</label>
+       <select
+        value={selectedStatusId}
+        onChange={(event) => {
+         setSelectedStatusId(event.target.value);
+         setPage(1);
+        }}
+        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-gray-500">
+        <option value="">All statuses</option>
+        {statusOptions.map((status) => (
+         <option key={status.id} value={status.id}>
+          {status.name}
          </option>
         ))}
        </select>
       </div>
-     )}
 
-     {/* Add order */}
-     <Link
-      href="/admin/orders/create"
-      className="inline-flex h-[42px] items-center justify-center gap-2 rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white transition hover:bg-gray-800">
-      <FaPlus className="text-xs" />
-
-      <span>Thêm đơn hàng</span>
-     </Link>
-    </div>
-   </div>
-
-   {/* Error */}
-   {error && <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
-
-   {/* Success */}
-   {success && <div className="mb-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">{success}</div>}
-
-   {/* Summary */}
-   <div className="mb-6 grid gap-4 md:grid-cols-2">
-    <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-     <p className="text-sm text-gray-500">Tổng đơn hàng</p>
-
-     <p className="mt-2 text-2xl font-bold text-gray-900">{summary.totalOrders}</p>
-    </div>
-
-    <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-     <p className="text-sm text-gray-500">Tổng giá trị</p>
-
-     <p className="mt-2 text-2xl font-bold text-gray-900">{summary.totalAmount.toLocaleString("vi-VN")}</p>
-    </div>
-   </div>
-
-   {/* Filters */}
-   <div className="mb-6 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-    <div className="grid gap-4 xl:grid-cols-[1.5fr_1fr_1fr_1fr_1fr_auto]">
-     {/* Search */}
-     <div>
-      <label className="mb-1 block text-sm font-medium text-gray-700">Tìm kiếm</label>
-
-      <div className="flex">
-       <input
-        type="text"
-        value={searchInput}
-        onChange={(event) => setSearchInput(event.target.value)}
-        onKeyDown={(event) => {
-         if (event.key === "Enter") {
-          handleSearch();
-         }
+      <div>
+       <label className="mb-1.5 block text-xs font-semibold text-gray-600">Payment status</label>
+       <select
+        value={selectedPaymentStatus}
+        onChange={(event) => {
+         setSelectedPaymentStatus(event.target.value);
+         setPage(1);
         }}
-        placeholder="Mã đơn, tên khách, SĐT..."
-        className="w-full rounded-l-lg border border-gray-300 px-3 py-2.5 text-sm outline-none focus:border-gray-900"
-       />
+        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-gray-500">
+        {PAYMENT_STATUS_OPTIONS.map((option) => (
+         <option key={option.value} value={option.value}>
+          {option.label}
+         </option>
+        ))}
+       </select>
+      </div>
 
-       <button
-        type="button"
-        onClick={handleSearch}
-        className="inline-flex items-center justify-center rounded-r-lg bg-gray-900 px-4 text-white hover:bg-gray-800">
-        <FaSearch />
-       </button>
+      <div>
+       <label className="mb-1.5 block text-xs font-semibold text-gray-600">From date</label>
+       <input
+        type="date"
+        value={dateFrom}
+        onChange={(event) => {
+         setDateFrom(event.target.value);
+         setPage(1);
+        }}
+        className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none focus:border-gray-500"
+       />
+      </div>
+
+      <div>
+       <label className="mb-1.5 block text-xs font-semibold text-gray-600">To date</label>
+       <input
+        type="date"
+        value={dateTo}
+        min={dateFrom || undefined}
+        onChange={(event) => {
+         setDateTo(event.target.value);
+         setPage(1);
+        }}
+        className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none focus:border-gray-500"
+       />
       </div>
      </div>
 
-     {/* Order status */}
-     <div>
-      <label className="mb-1 block text-sm font-medium text-gray-700">Trạng thái</label>
+     <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 pt-4">
+      <p className="text-sm text-gray-500">{pagination.total.toLocaleString("en-US")} order(s) found</p>
 
-      <select
-       value={orderStatus}
-       onChange={(event) => {
-        setOrderStatus(event.target.value);
-
-        setPagination((current) => ({
-         ...current,
-         page: 1,
-        }));
-       }}
-       className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-gray-900">
-       {statusOptions.map((option) => (
-        <option key={option.value} value={option.value}>
-         {option.label}
-        </option>
-       ))}
-      </select>
-     </div>
-
-     {/* Payment */}
-     <div>
-      <label className="mb-1 block text-sm font-medium text-gray-700">Thanh toán</label>
-
-      <select
-       value={paymentStatus}
-       onChange={(event) => {
-        setPaymentStatus(event.target.value);
-
-        setPagination((current) => ({
-         ...current,
-         page: 1,
-        }));
-       }}
-       className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-gray-900">
-       {paymentStatusOptions.map((option) => (
-        <option key={option.value} value={option.value}>
-         {option.label}
-        </option>
-       ))}
-      </select>
-     </div>
-
-     {/* From */}
-     <div>
-      <label className="mb-1 block text-sm font-medium text-gray-700">Từ ngày</label>
-
-      <input
-       type="date"
-       value={fromDate}
-       onChange={(event) => {
-        setFromDate(event.target.value);
-
-        setPagination((current) => ({
-         ...current,
-         page: 1,
-        }));
-       }}
-       className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-gray-900"
-      />
-     </div>
-
-     {/* To */}
-     <div>
-      <label className="mb-1 block text-sm font-medium text-gray-700">Đến ngày</label>
-
-      <input
-       type="date"
-       value={toDate}
-       onChange={(event) => {
-        setToDate(event.target.value);
-
-        setPagination((current) => ({
-         ...current,
-         page: 1,
-        }));
-       }}
-       className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-gray-900"
-      />
-     </div>
-
-     {/* Reset */}
-     <div className="flex items-end">
-      <button
-       type="button"
-       onClick={handleReset}
-       className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50">
-       Đặt lại
+      <button type="button" onClick={resetFilters} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium hover:bg-gray-50">
+       Clear filters
       </button>
      </div>
     </div>
-   </div>
 
-   {/* Orders table */}
-   <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-    <div className="overflow-x-auto">
-     <table className="min-w-full text-sm">
-      <thead className="border-b border-gray-200 bg-gray-50">
-       <tr>
-        <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-gray-700">Đơn hàng</th>
-
-        <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-gray-700">Khách hàng</th>
-
-        {isSuperAdmin && <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-gray-700">Store</th>}
-
-        <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-gray-700">Tổng tiền</th>
-
-        <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-gray-700">Trạng thái</th>
-
-        <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-gray-700">Thanh toán</th>
-
-        <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-gray-700">Ngày tạo</th>
-
-        <th className="whitespace-nowrap px-4 py-3 text-right font-semibold text-gray-700">Xem</th>
-       </tr>
-      </thead>
-
-      <tbody className="divide-y divide-gray-100">
-       {loadingOrders ? (
-        <tr>
-         <td colSpan={isSuperAdmin ? 8 : 7} className="px-4 py-12 text-center text-gray-500">
-          Đang tải đơn hàng...
-         </td>
-        </tr>
-       ) : orders.length === 0 ? (
-        <tr>
-         <td colSpan={isSuperAdmin ? 8 : 7} className="px-4 py-12 text-center text-gray-500">
-          Không có đơn hàng.
-         </td>
-        </tr>
-       ) : (
-        orders.map((order) => {
-         const customer = typeof order.customerId === "object" ? order.customerId : null;
-
-         const store = typeof order.storeId === "object" ? order.storeId : stores.find((item) => item._id === order.storeId);
-
-         const isUpdating = updatingOrderId === order._id;
-
-         const nextStatuses = allowedTransitions[order.status] || [];
-
-         return (
-          <tr key={order._id} className="transition hover:bg-gray-50">
-           {/* Order */}
-           <td className="px-4 py-4">
-            <div className="font-semibold text-gray-900">{order.orderNumber}</div>
-
-            <div className="mt-1 text-xs text-gray-400">{order._id}</div>
-           </td>
-
-           {/* Customer */}
-           <td className="px-4 py-4">
-            <div className="font-medium text-gray-900">{order.customerSnapshot?.name || customer?.name || "Không xác định"}</div>
-
-            <div className="mt-1 text-xs text-gray-500">{order.customerSnapshot?.phone || customer?.phone || "-"}</div>
-           </td>
-
-           {/* Store */}
-           {isSuperAdmin && <td className="px-4 py-4 text-gray-600">{store?.name || "-"}</td>}
-
-           {/* Total */}
-           <td className="whitespace-nowrap px-4 py-4">
-            <span className="font-semibold text-gray-900">{formatMoney(order.total, order.currency)}</span>
-           </td>
-
-           {/* STATUS DROPDOWN */}
-           <td className="px-4 py-4">
-            <div className="relative min-w-[155px]">
-             <select
-              value={order.status}
-              disabled={isUpdating || nextStatuses.length === 0}
-              onChange={(event) => handleStatusChange(order, event.target.value)}
-              className={`w-full appearance-none rounded-lg border px-3 py-2 text-xs font-medium outline-none transition focus:ring-2 focus:ring-gray-200 disabled:cursor-not-allowed disabled:opacity-60 ${getStatusSelectClass(
-               order.status,
-              )}`}>
-              <option value={order.status}>{isUpdating ? "Đang cập nhật..." : getStatusLabel(order.status)}</option>
-
-              {nextStatuses.map((nextStatus) => (
-               <option key={nextStatus} value={nextStatus}>
-                {getStatusLabel(nextStatus)}
-               </option>
-              ))}
-             </select>
-
-             {/* Custom arrow */}
-             <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-current">
-              <svg width="12" height="12" viewBox="0 0 20 20" fill="currentColor">
-               <path d="M5.5 7.5L10 12l4.5-4.5L16 9l-6 6-6-6 1.5-1.5Z" />
-              </svg>
-             </div>
-            </div>
-           </td>
-
-           {/* Payment */}
-           <td className="px-4 py-4">
-            <span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium ${getPaymentStatusClass(order.paymentStatus)}`}>
-             {getPaymentStatusLabel(order.paymentStatus)}
-            </span>
-           </td>
-
-           {/* Created */}
-           <td className="whitespace-nowrap px-4 py-4 text-gray-600">{new Date(order.createdAt).toLocaleString("vi-VN")}</td>
-
-           {/* View */}
-           <td className="px-4 py-4">
-            <div className="flex justify-end">
-             <Link
-              href={`/admin/orders/${order._id}`}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 text-gray-700 transition hover:bg-gray-50"
-              title="Xem đơn hàng">
-              <FaEye />
-             </Link>
-            </div>
-           </td>
-          </tr>
-         );
-        })
-       )}
-      </tbody>
-     </table>
-    </div>
-
-    {/* Pagination */}
-    {pagination.totalPages > 1 && (
-     <div className="flex flex-col gap-3 border-t border-gray-200 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
-      <div className="text-sm text-gray-500">
-       Trang {pagination.page} / {pagination.totalPages}
-       {" · "}
-       {pagination.total} đơn hàng
+    <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+     <div className="flex flex-col gap-2 border-b border-gray-200 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+      <div>
+       <h2 className="font-semibold">Orders</h2>
+       <p className="mt-1 text-xs text-gray-500">
+        Page {pagination.page} of {Math.max(totalPages, 1)}
+       </p>
       </div>
-
-      <div className="flex gap-2">
-       <button
-        type="button"
-        disabled={pagination.page <= 1 || loadingOrders}
-        onClick={() =>
-         setPagination((current) => ({
-          ...current,
-          page: current.page - 1,
-         }))
-        }
-        className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40">
-        Trước
-       </button>
-
-       <button
-        type="button"
-        disabled={pagination.page >= pagination.totalPages || loadingOrders}
-        onClick={() =>
-         setPagination((current) => ({
-          ...current,
-          page: current.page + 1,
-         }))
-        }
-        className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40">
-        Sau
-       </button>
-      </div>
+      <span className="text-sm text-gray-500">{orders.length} order(s) on this page</span>
      </div>
-    )}
+
+     {loading ? (
+      <div className="flex min-h-[250px] items-center justify-center gap-3 text-sm text-gray-500">
+       <FaSyncAlt className="animate-spin" />
+       Loading orders...
+      </div>
+     ) : orders.length === 0 ? (
+      <div className="flex min-h-[250px] flex-col items-center justify-center px-4 text-center">
+       <div className="flex h-14 w-14 items-center justify-center rounded-full bg-gray-100 text-2xl text-gray-400">
+        <FaBox />
+       </div>
+       <h3 className="mt-4 font-semibold">No orders found</h3>
+       <p className="mt-1 text-sm text-gray-500">Try changing your filters or search terms.</p>
+      </div>
+     ) : (
+      <>
+       <div className="overflow-x-auto">
+        <table className="w-full min-w-[1050px] text-left text-sm">
+         <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+          <tr>
+           <th className="px-5 py-4 font-semibold">Order</th>
+           <th className="px-5 py-4 font-semibold">Customer</th>
+           <th className="px-5 py-4 font-semibold">Date</th>
+           <th className="px-5 py-4 font-semibold">Total</th>
+           <th className="px-5 py-4 font-semibold">Payment</th>
+           <th className="px-5 py-4 font-semibold">Order status</th>
+           <th className="px-5 py-4 text-right font-semibold">Actions</th>
+          </tr>
+         </thead>
+
+         <tbody className="divide-y divide-gray-100">
+          {orders.map((order) => {
+           const customer = getCustomer(order);
+           const currentStatus = getOrderStatus(order);
+
+           const nextStatuses = getForwardStatuses(currentStatus, statusOptions);
+
+           const currency = order.currency || "VNĐ";
+
+           return (
+            <tr key={order._id} className="hover:bg-gray-50/70">
+             <td className="px-5 py-4 align-top">
+              <button type="button" onClick={() => void openOrderDetail(order._id)} className="text-left font-semibold text-blue-700 hover:underline">
+               {order.orderNumber || order._id}
+              </button>
+              <p className="mt-1 text-xs text-gray-400">ID: {order._id.slice(-8)}</p>
+             </td>
+
+             <td className="max-w-[230px] px-5 py-4 align-top">
+              <p className="font-medium text-gray-800">{customer.name || "Guest"}</p>
+              <p className="mt-1 text-xs text-gray-500">{customer.phone || "No phone"}</p>
+              {customer.email && <p className="mt-1 truncate text-xs text-gray-500">{customer.email}</p>}
+             </td>
+
+             <td className="whitespace-nowrap px-5 py-4 align-top text-gray-600">
+              <div className="flex items-center gap-2">
+               <FaCalendarAlt className="text-gray-400" />
+               {formatDate(order.createdAt)}
+              </div>
+             </td>
+
+             <td className="whitespace-nowrap px-5 py-4 align-top">
+              <span className="font-semibold">{formatPrice(Number(order.total || 0), currency)}</span>
+             </td>
+
+             <td className="px-5 py-4 align-top">
+              <p className="text-xs text-gray-500">{order.paymentMethod || "—"}</p>
+
+              <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getPaymentStatusStyle(order.paymentStatus)}`}>
+               {(order.paymentStatus || "PENDING").replace(/_/g, " ")}
+              </span>
+
+              <select
+               value={order.paymentStatus || "PENDING"}
+               disabled={updatingPaymentOrderId === order._id}
+               onChange={(event) => {
+                void handlePaymentStatusChange(order, event.target.value);
+               }}
+               className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-2 py-2 text-xs outline-none focus:border-blue-500 disabled:opacity-50"
+               aria-label={`Change payment status for ${order.orderNumber || order._id}`}>
+               {PAYMENT_STATUS_OPTIONS.filter((option) => option.value !== "").map((option) => (
+                <option key={option.value} value={option.value}>
+                 {option.label}
+                </option>
+               ))}
+              </select>
+
+              {updatingPaymentOrderId === order._id && <p className="mt-1 text-xs text-gray-500">Updating payment...</p>}
+             </td>
+
+             <td className="min-w-[210px] px-5 py-4 align-top">
+              <div className="flex items-center gap-2">
+               <span
+                className="h-2.5 w-2.5 shrink-0 rounded-full"
+                style={{
+                 backgroundColor: currentStatus?.color || "#6B7280",
+                }}
+               />
+               <span className="font-medium">{currentStatus?.name || "Unknown status"}</span>
+              </div>
+
+              {nextStatuses.length > 0 ? (
+               <select
+                value=""
+                disabled={updatingOrderId === order._id}
+                onChange={(event) => {
+                 const nextStatusId = event.target.value;
+
+                 if (nextStatusId) {
+                  void handleStatusChange(order, nextStatusId);
+                 }
+                }}
+                className="mt-3 w-full rounded-lg border border-gray-300 bg-white px-2.5 py-2 text-xs outline-none focus:border-blue-500 disabled:opacity-50">
+                <option value="">{updatingOrderId === order._id ? "Updating..." : "Change order status"}</option>
+
+                {nextStatuses.map((status) => (
+                 <option key={status.id} value={status.id}>
+                  {status.name}
+                 </option>
+                ))}
+               </select>
+              ) : (
+               <p className="mt-2 text-xs text-gray-400">{currentStatus?.isFinal ? "This order has reached its final status" : "No later status available"}</p>
+              )}
+             </td>
+
+             <td className="px-5 py-4 text-right align-top flex gap-1">
+              <button
+               type="button"
+               onClick={() => handleDeleteOrder(order._id)}
+               disabled={deletingOrderId === order._id}
+               className="rounded-md bg-red-600 px-3 py-2 text-sm text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50">
+               {deletingOrderId === order._id ? "Đang xóa..." : "Xóa"}
+              </button>
+              <button
+               type="button"
+               onClick={() => void openOrderDetail(order._id)}
+               aria-label={`View order ${order.orderNumber || order._id}`}
+               className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-xs font-semibold hover:bg-gray-100">
+               <FaEye />
+               View details
+              </button>
+             </td>
+            </tr>
+           );
+          })}
+         </tbody>
+        </table>
+       </div>
+
+       <div className="flex flex-col gap-3 border-t border-gray-200 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+        <p className="text-sm text-gray-500">
+         Showing {pagination.total === 0 ? 0 : (pagination.page - 1) * pagination.limit + 1} to {Math.min(pagination.page * pagination.limit, pagination.total)}{" "}
+         of {pagination.total} orders
+        </p>
+
+        <div className="flex items-center gap-2">
+         <button
+          type="button"
+          disabled={page <= 1 || loading}
+          onClick={() => setPage((current) => Math.max(1, current - 1))}
+          className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40">
+          <FaChevronLeft />
+          Previous
+         </button>
+
+         <span className="min-w-[90px] text-center text-sm text-gray-600">
+          Page {pagination.page} / {Math.max(totalPages, 1)}
+         </span>
+
+         <button
+          type="button"
+          disabled={page >= totalPages || loading}
+          onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+          className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40">
+          Next
+          <FaChevronRight />
+         </button>
+        </div>
+       </div>
+      </>
+     )}
+    </div>
    </div>
+
+   {/* Order detail popup */}
+   {(detailLoading || detailOrder) && (
+    <div
+     className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 p-2 backdrop-blur-sm sm:p-5"
+     onMouseDown={(event) => {
+      if (event.target === event.currentTarget && !detailLoading && !savingDetailStatus) {
+       setDetailOrder(null);
+      }
+     }}>
+     <section
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="order-detail-title"
+      className="flex max-h-[96vh] w-full max-w-[1500px] flex-col overflow-hidden rounded-2xl bg-gray-100 shadow-2xl">
+      {/* Popup header */}
+      <header className="flex shrink-0 items-center justify-between border-b border-gray-200 bg-white px-4 py-3 sm:px-6">
+       <div className="min-w-0">
+        <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Order management</p>
+        <h2 id="order-detail-title" className="mt-1 truncate text-lg font-bold text-gray-900">
+         {detailOrder?.orderNumber || "Loading order..."}
+        </h2>
+        {detailOrder && <p className="mt-1 text-sm text-gray-500">{getCustomer(detailOrder).name || "Guest"}</p>}
+       </div>
+
+       <button
+        type="button"
+        onClick={() => {
+         if (!savingDetailStatus) setDetailOrder(null);
+        }}
+        disabled={savingDetailStatus}
+        aria-label="Close order details"
+        className="ml-3 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-100 disabled:opacity-50">
+        <FaTimes />
+       </button>
+      </header>
+
+      {/* Scrollable popup content */}
+      <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-5">
+       {detailLoading || !detailOrder ? (
+        <div className="flex min-h-[300px] items-center justify-center gap-3 text-sm text-gray-500">
+         <FaSyncAlt className="animate-spin" />
+         Loading order details...
+        </div>
+       ) : (
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.9fr)]">
+         {/* Main column */}
+         <div className="space-y-4">
+          <section className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+           <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
+            <h3 className="font-semibold">Products</h3>
+            <span className="text-sm text-gray-500">{detailItems.length} item type(s)</span>
+           </div>
+
+           {detailItems.length === 0 ? (
+            <p className="p-5 text-sm text-gray-500">No products found for this order.</p>
+           ) : (
+            <div className="divide-y divide-gray-100">
+             {detailItems.map((item) => {
+              const snapshot = item.productSnapshot || {};
+              const product = item.productId && typeof item.productId === "object" ? item.productId : undefined;
+
+              const name = snapshot.name || product?.name || "Product";
+              const sku = snapshot.sku || product?.sku || "—";
+              const image = snapshot.image || product?.images?.main;
+
+              return (
+               <div key={item._id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
+                <div className="flex min-w-0 flex-1 items-center gap-3">
+                 <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-gray-100 bg-gray-50">
+                  {image ? (
+                   // eslint-disable-next-line @next/next/no-img-element
+                   <img src={image} alt={name} className="h-full w-full object-contain" />
+                  ) : (
+                   <FaBox className="text-xl text-gray-300" />
+                  )}
+                 </div>
+
+                 <div className="min-w-0">
+                  <p className="break-words font-semibold text-gray-800">{name}</p>
+                  <p className="mt-1 text-xs text-gray-500">SKU: {sku}</p>
+                  <p className="mt-1 text-xs text-gray-500">Quantity: {item.quantity}</p>
+                 </div>
+                </div>
+
+                <div className="flex shrink-0 items-center justify-between gap-4 border-t border-gray-100 pt-3 sm:min-w-[210px] sm:flex-col sm:items-end sm:justify-center sm:border-0 sm:pt-0">
+                 <div className="text-sm text-gray-500">
+                  {formatPrice(item.price, item.currency || detailOrder.currency)} × {item.quantity}
+                 </div>
+                 <p className="font-bold text-gray-900">{formatPrice(item.subtotal, item.currency || detailOrder.currency)}</p>
+                </div>
+               </div>
+              );
+             })}
+            </div>
+           )}
+          </section>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+           <section className="rounded-xl border border-gray-200 bg-white p-4">
+            <h3 className="mb-4 font-semibold">Payment</h3>
+
+            <dl className="space-y-4 text-sm">
+             <div>
+              <dt className="text-gray-500">Payment method</dt>
+              <dd className="mt-1 font-medium">{(detailOrder.paymentMethod || "COD").replace(/_/g, " ")}</dd>
+             </div>
+
+             <div>
+              <dt className="text-gray-500">Current payment status</dt>
+              <dd className="mt-1">
+               <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getPaymentStatusStyle(detailOrder.paymentStatus)}`}>
+                {(detailOrder.paymentStatus || "PENDING").replace(/_/g, " ")}
+               </span>
+              </dd>
+             </div>
+
+             <div>
+              <label htmlFor="detail-payment-status" className="mb-1.5 block text-xs font-semibold text-gray-600">
+               Change payment status
+              </label>
+
+              <select
+               id="detail-payment-status"
+               value={detailPaymentStatus}
+               disabled={savingDetailPaymentStatus}
+               onChange={(event) => {
+                setDetailPaymentStatus(event.target.value);
+               }}
+               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-500 disabled:opacity-50">
+               {PAYMENT_STATUS_OPTIONS.filter((option) => option.value !== "").map((option) => (
+                <option key={option.value} value={option.value}>
+                 {option.label}
+                </option>
+               ))}
+              </select>
+
+              <button
+               type="button"
+               disabled={
+                savingDetailPaymentStatus || updatingPaymentOrderId === detailOrder._id || detailPaymentStatus === (detailOrder.paymentStatus || "PENDING")
+               }
+               onClick={async () => {
+                if (savingDetailPaymentStatus) return;
+
+                setSavingDetailPaymentStatus(true);
+
+                const previousPaymentStatus = detailOrder.paymentStatus || "PENDING";
+
+                try {
+                 const success = await handlePaymentStatusChange(detailOrder, detailPaymentStatus);
+
+                 if (!success) {
+                  setDetailPaymentStatus(previousPaymentStatus);
+                 }
+                } finally {
+                 setSavingDetailPaymentStatus(false);
+                }
+               }}
+               className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50">
+               {savingDetailPaymentStatus ? <FaSyncAlt className="animate-spin" /> : <FaCheckCircle />}
+
+               {savingDetailPaymentStatus ? "Saving..." : "Save payment status"}
+              </button>
+             </div>
+            </dl>
+           </section>
+
+           <section className="rounded-xl border border-gray-200 bg-white p-4">
+            <h3 className="mb-3 font-semibold">Order notes</h3>
+            <p className="whitespace-pre-wrap break-words text-sm text-gray-600">{detailOrder.note || "No order note."}</p>
+           </section>
+          </div>
+
+          <section className="rounded-xl border border-gray-200 bg-white p-4">
+           <h3 className="mb-4 font-semibold">Status history</h3>
+
+           {detailHistory.length === 0 ? (
+            <p className="text-sm text-gray-500">No status history available.</p>
+           ) : (
+            <div className="space-y-4">
+             {detailHistory.map((history) => (
+              <div key={history._id} className="flex gap-3">
+               <div className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-blue-500" />
+               <div className="min-w-0 flex-1">
+                <p className="break-words text-sm font-semibold text-gray-800">
+                 {history.fromStatusName || history.fromStatusId?.name || "—"} → {history.toStatusName || history.toStatusId?.name || "—"}
+                </p>
+                <p className="mt-1 text-xs text-gray-500">
+                 {formatDate(history.createdAt)}
+                 {history.changedBy?.name ? ` · ${history.changedBy.name}` : ""}
+                </p>
+                {history.note && <p className="mt-1 whitespace-pre-wrap text-sm text-gray-600">{history.note}</p>}
+               </div>
+              </div>
+             ))}
+            </div>
+           )}
+          </section>
+
+          <section className="rounded-xl border border-gray-200 bg-white p-4">
+           <div className="mb-4 flex items-center justify-between gap-3">
+            <h3 className="font-semibold">Payment history</h3>
+            <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600">{detailPaymentHistory.length} record(s)</span>
+           </div>
+
+           {detailPaymentHistory.length === 0 ? (
+            <p className="text-sm text-gray-500">No payment history available.</p>
+           ) : (
+            <div className="space-y-4">
+             {detailPaymentHistory.map((history) => (
+              <div key={history._id} className="flex gap-3">
+               <div className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500" />
+
+               <div className="min-w-0 flex-1">
+                <p className="break-words text-sm font-semibold text-gray-800">
+                 {(history.fromPaymentStatus || "PENDING").replace(/_/g, " ")}
+                 {" → "}
+                 {(history.toPaymentStatus || "PENDING").replace(/_/g, " ")}
+                </p>
+
+                <p className="mt-1 text-xs text-gray-500">
+                 {formatDate(history.createdAt)}
+                 {history.changedBy?.name ? ` · ${history.changedBy.name}` : history.changedBy?.email ? ` · ${history.changedBy.email}` : ""}
+                </p>
+
+                {history.note && <p className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-600">{history.note}</p>}
+               </div>
+              </div>
+             ))}
+            </div>
+           )}
+          </section>
+         </div>
+
+         {/* Sidebar */}
+         <div className="space-y-4">
+          <section className="rounded-xl border border-gray-200 bg-white p-4">
+           <h3 className="mb-4 font-semibold">Order information</h3>
+
+           <dl className="space-y-3 text-sm">
+            <div>
+             <dt className="text-gray-500">Order number</dt>
+             <dd className="mt-1 break-all font-semibold">{detailOrder.orderNumber || detailOrder._id}</dd>
+            </div>
+            <div>
+             <dt className="text-gray-500">Order ID</dt>
+             <dd className="mt-1 break-all text-xs">{detailOrder._id}</dd>
+            </div>
+            <div>
+             <dt className="text-gray-500">Created at</dt>
+             <dd className="mt-1">{formatDate(detailOrder.createdAt)}</dd>
+            </div>
+            <div>
+             <dt className="text-gray-500">Last updated</dt>
+             <dd className="mt-1">{formatDate(detailOrder.updatedAt)}</dd>
+            </div>
+            <div>
+             <dt className="text-gray-500">Store</dt>
+             <dd className="mt-1">{getStoreName(detailOrder, selectedStore?.name || selectedStore?.storeName || "—")}</dd>
+            </div>
+            <div>
+             <dt className="text-gray-500">Created by</dt>
+             <dd className="mt-1">{getCreatedByName(detailOrder)}</dd>
+            </div>
+           </dl>
+          </section>
+
+          <section className="rounded-xl border border-gray-200 bg-white p-4">
+           <h3 className="mb-4 font-semibold">Customer</h3>
+
+           <dl className="space-y-3 text-sm">
+            <div>
+             <dt className="text-gray-500">Full name</dt>
+             <dd className="mt-1 break-words font-medium">{getCustomer(detailOrder).name || "Guest"}</dd>
+            </div>
+            <div>
+             <dt className="text-gray-500">Phone</dt>
+             <dd className="mt-1 break-words">{getCustomer(detailOrder).phone || "—"}</dd>
+            </div>
+            <div>
+             <dt className="text-gray-500">Email</dt>
+             <dd className="mt-1 break-words">{getCustomer(detailOrder).email || "—"}</dd>
+            </div>
+           </dl>
+          </section>
+
+          <section className="rounded-xl border border-gray-200 bg-white p-4">
+           <div className="mb-4 flex items-center gap-2">
+            <FaMapMarkerAlt className="text-gray-500" />
+            <h3 className="font-semibold">Shipping address</h3>
+           </div>
+
+           <p className="break-words text-sm leading-6 text-gray-700">
+            {[
+             detailOrder.shippingAddress?.address,
+             detailOrder.shippingAddress?.ward,
+             detailOrder.shippingAddress?.district,
+             detailOrder.shippingAddress?.province,
+             detailOrder.shippingAddress?.postalCode,
+            ]
+             .filter(Boolean)
+             .join(", ") || "No shipping address"}
+           </p>
+
+           <div className="mt-4 border-t border-gray-100 pt-3 text-sm">
+            <p className="text-gray-500">Shipping method</p>
+            <p className="mt-1 font-medium">{detailOrder.shippingMethod || "—"}</p>
+
+            <p className="mt-3 text-gray-500">Tracking number</p>
+            <p className="mt-1 break-all font-medium">{detailOrder.trackingNumber || "—"}</p>
+           </div>
+          </section>
+
+          <section className="rounded-xl border border-gray-200 bg-white p-4">
+           <h3 className="mb-4 font-semibold">Payment</h3>
+
+           <dl className="space-y-3 text-sm">
+            <div>
+             <dt className="text-gray-500">Payment method</dt>
+             <dd className="mt-1 font-medium">{(detailOrder.paymentMethod || "COD").replace(/_/g, " ")}</dd>
+            </div>
+            <div>
+             <dt className="text-gray-500">Payment status</dt>
+             <dd className="mt-1">
+              <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getPaymentStatusStyle(detailOrder.paymentStatus)}`}>
+               {(detailOrder.paymentStatus || "PENDING").replace(/_/g, " ")}
+              </span>
+             </dd>
+            </div>
+           </dl>
+          </section>
+         </div>
+        </div>
+       )}
+      </div>
+
+      {/* Fixed footer */}
+      {detailOrder && !detailLoading && (
+       <footer className="shrink-0 border-t border-gray-200 bg-white p-3 sm:p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+         <div className="grid flex-1 grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+           <select
+            value={detailStatusId}
+            onChange={(event) => setDetailStatusId(event.target.value)}
+            disabled={savingDetailStatus}
+            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-500 disabled:opacity-50">
+            {currentDetailStatus && <option value={currentDetailStatus._id}>Current: {currentDetailStatus.name}</option>}
+
+            {detailNextStatuses.map((status: any) => {
+             const id = getStatusId(status);
+             const populated = typeof status === "string" ? statusOptions.find((option) => option.id === status) : status;
+
+             return (
+              <option key={id} value={id}>
+               {populated?.name || id}
+              </option>
+             );
+            })}
+           </select>
+          </div>
+
+          <div>
+           <label className="mb-1.5 block text-xs font-semibold text-gray-600">Status change note</label>
+           <input
+            value={detailNote}
+            onChange={(event) => setDetailNote(event.target.value)}
+            placeholder="Optional note..."
+            disabled={savingDetailStatus}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none focus:border-blue-500 disabled:opacity-50"
+           />
+          </div>
+         </div>
+
+         <div className="flex flex-wrap items-center justify-between gap-2 lg:justify-end">
+          <div className="mr-2">
+           <p className="text-xs text-gray-500">Order total</p>
+           <p className="text-lg font-bold">{formatPrice(detailOrder.total || 0, detailOrder.currency)}</p>
+          </div>
+
+          <button
+           type="button"
+           onClick={() => setDetailOrder(null)}
+           disabled={savingDetailStatus}
+           className="rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50 disabled:opacity-50">
+           Close
+          </button>
+
+          <button
+           type="button"
+           onClick={() => void saveDetailStatus()}
+           disabled={savingDetailStatus || !detailStatusId || detailStatusId === currentDetailStatus?._id}
+           className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50">
+           {savingDetailStatus ? <FaSyncAlt className="animate-spin" /> : <FaCheckCircle />}
+           {savingDetailStatus ? "Saving..." : "Save status"}
+          </button>
+         </div>
+        </div>
+       </footer>
+      )}
+     </section>
+    </div>
+   )}
   </div>
  );
 }

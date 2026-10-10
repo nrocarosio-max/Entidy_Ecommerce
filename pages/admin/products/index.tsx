@@ -249,7 +249,7 @@ export default function ProductsPage() {
  function formatPrice(price: number, currency: string) {
   return new Intl.NumberFormat("en-US", {
    style: "currency",
-   currency: currency || "USD",
+   currency: currency || "VNĐ",
    maximumFractionDigits: 2,
   }).format(price);
  }

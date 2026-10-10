@@ -3,6 +3,11 @@ import formidable, { type File } from "formidable";
 import fs from "fs/promises";
 
 import { v2 as cloudinary } from "cloudinary";
+cloudinary.config({
+ cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+ api_key: process.env.CLOUDINARY_API_KEY,
+ api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 import { getCurrentUser } from "~/lib/permissions";
 
 export const config = {
@@ -127,7 +132,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   return res.status(500).json({
    success: false,
-   message: "Failed to upload file.",
+   message: error instanceof Error ? error.message : "Failed to upload file.",
   });
  }
 }

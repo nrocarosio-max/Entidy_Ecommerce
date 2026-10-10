@@ -1,10 +1,8 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useSession } from "next-auth/react";
-import { FaArrowLeft, FaChevronRight, FaFolder, FaSave } from "react-icons/fa";
-
-import AdminLayout from "~/layout/AdminLayout";
+import { FaArrowLeft, FaChevronRight, FaSave } from "react-icons/fa";
 
 interface Store {
  _id: string;
@@ -21,10 +19,24 @@ interface Category {
  parentId: string | null;
  sortOrder: number;
  isActive: boolean;
+ createdAt?: string;
+ updatedAt?: string;
 }
 
-export default function CreateCollectionPage() {
+interface CategoryForm {
+ name: string;
+ slug: string;
+ description: string;
+ image: string;
+ parentId: string;
+ sortOrder: string;
+ isActive: boolean;
+}
+
+export default function EditCategoryPage() {
  const router = useRouter();
+
+ const { id } = router.query;
 
  const { data: session, status } = useSession();
 
@@ -38,9 +50,13 @@ export default function CreateCollectionPage() {
 
  const [categories, setCategories] = useState<Category[]>([]);
 
+ const [category, setCategory] = useState<Category | null>(null);
+
  const [selectedStore, setSelectedStore] = useState("");
 
  const [storesLoading, setStoresLoading] = useState(false);
+
+ const [loading, setLoading] = useState(true);
 
  const [categoriesLoading, setCategoriesLoading] = useState(false);
 
@@ -48,7 +64,7 @@ export default function CreateCollectionPage() {
 
  const [error, setError] = useState("");
 
- const [form, setForm] = useState({
+ const [form, setForm] = useState<CategoryForm>({
   name: "",
   slug: "",
   description: "",
@@ -59,12 +75,12 @@ export default function CreateCollectionPage() {
  });
 
  /*
-  * Determine the store used by this page.
+  * Store used by the current page.
   */
  const activeStoreId = isSuperAdmin ? selectedStore : userStoreId;
 
  /*
-  * Generate slug from collection name.
+  * Generate a URL-safe slug.
   */
  const generateSlug = (value: string) => {
   return value
@@ -102,7 +118,8 @@ export default function CreateCollectionPage() {
     setStores(loadedStores);
 
     /*
-     * Automatically select the first store.
+     * If the category has not loaded yet,
+     * the first store is temporarily selected.
      */
     if (loadedStores.length > 0 && !selectedStore) {
      setSelectedStore(loadedStores[0]._id);
@@ -120,8 +137,79 @@ export default function CreateCollectionPage() {
  }, [status, isSuperAdmin]);
 
  /*
-  * Load parent collections whenever
-  * the active store changes.
+  * Load the current category.
+  *
+  * For SUPER_ADMIN we wait until a store has
+  * been selected.
+  */
+ useEffect(() => {
+  if (status !== "authenticated" || !id || Array.isArray(id)) {
+   return;
+  }
+
+  if (!activeStoreId) {
+   return;
+  }
+
+  const loadCategory = async () => {
+   try {
+    setLoading(true);
+    setError("");
+
+    const params = new URLSearchParams();
+
+    params.set("storeId", activeStoreId);
+
+    const response = await fetch(`/api/admin/categories/${id}?${params.toString()}`);
+
+    const data = await response.json();
+
+    if (!response.ok) {
+     throw new Error(data?.message || "Failed to load category.");
+    }
+
+    const loadedCategory = data.category ?? data;
+
+    if (!loadedCategory?._id) {
+     throw new Error("Category was not found.");
+    }
+
+    /*
+     * Make sure the returned category
+     * actually belongs to the selected store.
+     */
+    if (loadedCategory.storeId && typeof loadedCategory.storeId === "string" && loadedCategory.storeId !== activeStoreId) {
+     throw new Error("This category does not belong to the selected store.");
+    }
+
+    setCategory(loadedCategory);
+
+    setForm({
+     name: loadedCategory.name ?? "",
+     slug: loadedCategory.slug ?? "",
+     description: loadedCategory.description ?? "",
+     image: loadedCategory.image ?? "",
+     parentId: typeof loadedCategory.parentId === "object" ? (loadedCategory.parentId?._id ?? "") : (loadedCategory.parentId ?? ""),
+     sortOrder: String(loadedCategory.sortOrder ?? 0),
+     isActive: loadedCategory.isActive ?? true,
+    });
+   } catch (error) {
+    console.error(error);
+
+    setCategory(null);
+
+    setError(error instanceof Error ? error.message : "Failed to load category.");
+   } finally {
+    setLoading(false);
+   }
+  };
+
+  loadCategory();
+ }, [status, id, activeStoreId]);
+
+ /*
+  * Load all categories for the selected store
+  * so the user can choose a parent category.
   */
  useEffect(() => {
   if (status !== "authenticated" || !activeStoreId) {
@@ -132,7 +220,6 @@ export default function CreateCollectionPage() {
   const loadCategories = async () => {
    try {
     setCategoriesLoading(true);
-    setError("");
 
     const params = new URLSearchParams();
 
@@ -143,7 +230,7 @@ export default function CreateCollectionPage() {
     const data = await response.json();
 
     if (!response.ok) {
-     throw new Error(data?.message || "Failed to load collections.");
+     throw new Error(data?.message || "Failed to load categories.");
     }
 
     setCategories(data.categories ?? []);
@@ -152,7 +239,7 @@ export default function CreateCollectionPage() {
 
     setCategories([]);
 
-    setError(error instanceof Error ? error.message : "Failed to load collections.");
+    setError(error instanceof Error ? error.message : "Failed to load categories.");
    } finally {
     setCategoriesLoading(false);
    }
@@ -162,23 +249,45 @@ export default function CreateCollectionPage() {
  }, [status, activeStoreId]);
 
  /*
-  * Handle collection name changes.
+  * Never allow the current category to
+  * become its own parent.
+  */
+ const parentCategories = useMemo(() => {
+  return categories.filter((item) => item._id !== category?._id);
+ }, [categories, category?._id]);
+
+ /*
+  * Update name.
+  *
+  * Automatically updates the slug only when
+  * the slug has not been manually customized.
   */
  const handleNameChange = (value: string) => {
-  setForm((current) => ({
-   ...current,
-   name: value,
-   slug: !current.slug || current.slug === generateSlug(current.name) ? generateSlug(value) : current.slug,
-  }));
+  setForm((current) => {
+   const generatedCurrentSlug = generateSlug(current.name);
+
+   const shouldUpdateSlug = !current.slug || current.slug === generatedCurrentSlug;
+
+   return {
+    ...current,
+    name: value,
+    slug: shouldUpdateSlug ? generateSlug(value) : current.slug,
+   };
+  });
  };
 
  /*
-  * Submit form.
+  * Submit changes.
   */
  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
   event.preventDefault();
 
   setError("");
+
+  if (!id || Array.isArray(id)) {
+   setError("Invalid category ID.");
+   return;
+  }
 
   if (!activeStoreId) {
    setError("Please select a store.");
@@ -190,12 +299,12 @@ export default function CreateCollectionPage() {
   const slug = form.slug.trim();
 
   if (!name) {
-   setError("Collection name is required.");
+   setError("Category name is required.");
    return;
   }
 
   if (!slug) {
-   setError("Collection slug is required.");
+   setError("Category slug is required.");
    return;
   }
 
@@ -206,11 +315,19 @@ export default function CreateCollectionPage() {
    return;
   }
 
+  /*
+   * Prevent selecting itself as parent.
+   */
+  if (form.parentId && form.parentId === category?._id) {
+   setError("A category cannot be its own parent.");
+   return;
+  }
+
   try {
    setSaving(true);
 
-   const response = await fetch("/api/admin/categories", {
-    method: "POST",
+   const response = await fetch(`/api/admin/categories/${id}`, {
+    method: "PATCH",
     headers: {
      "Content-Type": "application/json",
     },
@@ -229,31 +346,85 @@ export default function CreateCollectionPage() {
    const data = await response.json();
 
    if (!response.ok) {
-    throw new Error(data?.message || "Failed to create collection.");
+    throw new Error(data?.message || "Failed to update category.");
    }
 
-   await router.push("/admin/collections");
+   await router.push("/admin/categories");
   } catch (error) {
    console.error(error);
 
-   setError(error instanceof Error ? error.message : "Failed to create collection.");
+   setError(error instanceof Error ? error.message : "Failed to update category.");
   } finally {
    setSaving(false);
   }
  };
 
+ /*
+  * Authentication loading.
+  */
  if (status === "loading") {
   return (
-   <AdminLayout>
-    <div className="flex min-h-[400px] items-center justify-center">
-     <p className="text-sm text-gray-400">Loading...</p>
+   <div className="flex min-h-[400px] items-center justify-center">
+    <p className="text-sm text-gray-400">Loading...</p>
+   </div>
+  );
+ }
+
+ /*
+  * Main loading state.
+  */
+ if (loading) {
+  return (
+   <>
+    <div className="p-4 md:p-6">
+     <div className="mb-6">
+      <div className="h-4 w-48 animate-pulse rounded bg-gray-200" />
+
+      <div className="mt-3 h-8 w-64 animate-pulse rounded bg-gray-200" />
+
+      <div className="mt-2 h-4 w-80 animate-pulse rounded bg-gray-100" />
+     </div>
+
+     <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="h-[500px] animate-pulse rounded-2xl bg-gray-100" />
+
+      <div className="space-y-6">
+       <div className="h-[280px] animate-pulse rounded-2xl bg-gray-100" />
+
+       <div className="h-[150px] animate-pulse rounded-2xl bg-gray-100" />
+      </div>
+     </div>
     </div>
-   </AdminLayout>
+   </>
+  );
+ }
+
+ /*
+  * Category not found.
+  */
+ if (!category) {
+  return (
+   <>
+    <div className="p-4 md:p-6">
+     <div className="rounded-2xl border border-gray-200 bg-white p-8 text-center">
+      <h1 className="text-lg font-semibold text-gray-900">Category not found</h1>
+
+      <p className="mt-2 text-sm text-gray-500">{error || "The category could not be loaded."}</p>
+
+      <Link
+       href="/admin/categories"
+       className="mt-5 inline-flex h-10 items-center gap-2 rounded-xl bg-gray-900 px-4 text-sm font-semibold text-white transition hover:bg-gray-800">
+       <FaArrowLeft size={11} />
+       Back to Categories
+      </Link>
+     </div>
+    </div>
+   </>
   );
  }
 
  return (
-  <AdminLayout>
+  <>
    <div className="p-4 md:p-6">
     {/* Header */}
     <div className="mb-6">
@@ -264,24 +435,24 @@ export default function CreateCollectionPage() {
 
       <FaChevronRight size={9} />
 
-      <Link href="/admin/collections" className="transition hover:text-gray-700">
-       Collections
+      <Link href="/admin/categories" className="transition hover:text-gray-700">
+       Categories
       </Link>
 
       <FaChevronRight size={9} />
 
-      <span className="text-gray-500">Create</span>
+      <span className="text-gray-500">Edit</span>
      </div>
 
      <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div>
-       <h1 className="text-2xl font-bold tracking-tight text-gray-900 md:text-3xl">Create Collection</h1>
+       <h1 className="text-2xl font-bold tracking-tight text-gray-900 md:text-3xl">Edit Category</h1>
 
-       <p className="mt-1 text-sm text-gray-500">Create a new collection for organizing products.</p>
+       <p className="mt-1 text-sm text-gray-500">Update category information and organization.</p>
       </div>
 
       <Link
-       href="/admin/collections"
+       href="/admin/categories"
        className="inline-flex h-10 w-fit items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 text-sm font-medium text-gray-600 transition hover:bg-gray-50">
        <FaArrowLeft size={11} />
        Back
@@ -299,7 +470,7 @@ export default function CreateCollectionPage() {
        <div>
         <h2 className="text-sm font-semibold text-gray-900">Store</h2>
 
-        <p className="mt-1 text-xs text-gray-400">Select the store where this collection will be created.</p>
+        <p className="mt-1 text-xs text-gray-400">Select the store that owns this category.</p>
        </div>
 
        <select
@@ -333,14 +504,14 @@ export default function CreateCollectionPage() {
        <div className="border-b border-gray-100 px-5 py-4">
         <h2 className="text-base font-semibold text-gray-900">Basic Information</h2>
 
-        <p className="mt-0.5 text-xs text-gray-400">Define the basic information of this collection.</p>
+        <p className="mt-0.5 text-xs text-gray-400">Update the basic information of this category.</p>
        </div>
 
        <div className="space-y-5 p-5">
         {/* Name */}
         <div>
          <label htmlFor="name" className="mb-2 block text-sm font-medium text-gray-700">
-          Collection Name
+          Category Name
           <span className="ml-1 text-red-500">*</span>
          </label>
 
@@ -375,7 +546,7 @@ export default function CreateCollectionPage() {
           className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 font-mono text-sm text-gray-700 outline-none transition placeholder:text-gray-400 focus:border-gray-400"
          />
 
-         <p className="mt-1.5 text-[11px] text-gray-400">Used in the collection URL.</p>
+         <p className="mt-1.5 text-[11px] text-gray-400">Used in the category URL.</p>
         </div>
 
         {/* Description */}
@@ -394,7 +565,7 @@ export default function CreateCollectionPage() {
            }))
           }
           rows={5}
-          placeholder="Describe this collection..."
+          placeholder="Describe this category..."
           className="w-full resize-none rounded-xl border border-gray-200 bg-white px-3 py-3 text-sm text-gray-700 outline-none transition placeholder:text-gray-400 focus:border-gray-400"
          />
         </div>
@@ -420,10 +591,10 @@ export default function CreateCollectionPage() {
          />
 
          {form.image && (
-          <div className="mt-3 flex h-32 w-32 overflow-hidden rounded-xl border border-gray-200 bg-gray-50">
+          <div className="mt-3 h-32 w-32 overflow-hidden rounded-xl border border-gray-200 bg-gray-50">
            <img
             src={form.image}
-            alt="Collection preview"
+            alt="Category preview"
             className="h-full w-full object-cover"
             onError={(event) => {
              event.currentTarget.style.display = "none";
@@ -450,7 +621,7 @@ export default function CreateCollectionPage() {
         {/* Parent */}
         <div>
          <label htmlFor="parentId" className="mb-2 block text-sm font-medium text-gray-700">
-          Parent Collection
+          Parent Category
          </label>
 
          <select
@@ -463,21 +634,17 @@ export default function CreateCollectionPage() {
            }))
           }
           disabled={!activeStoreId || categoriesLoading}
-          className="h-11 w-full appearance-none rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-700 outline-none transition focus:border-gray-400 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400">
-          <option value="">Root Collection</option>
+          className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-700 outline-none transition focus:border-gray-400 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400">
+          <option value="">Root Category</option>
 
-          {categories.map((category) => (
-           <option key={category._id} value={category._id}>
-            {category.name}
+          {parentCategories.map((item) => (
+           <option key={item._id} value={item._id}>
+            {item.name}
            </option>
           ))}
          </select>
 
-         {categoriesLoading && <p className="mt-1.5 text-[11px] text-gray-400">Loading collections...</p>}
-
-         {!categoriesLoading && activeStoreId && categories.length === 0 && (
-          <p className="mt-1.5 text-[11px] text-gray-400">No parent collections available. This will be created as a root collection.</p>
-         )}
+         {categoriesLoading && <p className="mt-1.5 text-[11px] text-gray-400">Loading categories...</p>}
         </div>
 
         {/* Sort Order */}
@@ -529,7 +696,7 @@ export default function CreateCollectionPage() {
          <span>
           <span className="block text-sm font-medium text-gray-700">Active</span>
 
-          <span className="mt-0.5 block text-xs leading-5 text-gray-400">Make this collection available for use.</span>
+          <span className="mt-0.5 block text-xs leading-5 text-gray-400">Make this category available for use.</span>
          </span>
         </label>
        </div>
@@ -542,11 +709,12 @@ export default function CreateCollectionPage() {
        className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-gray-900 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-300">
        <FaSave size={13} />
 
-       {saving ? "Creating..." : "Create Collection"}
+       {saving ? "Saving..." : "Save Changes"}
       </button>
      </div>
     </form>
    </div>
-  </AdminLayout>
+  </>
  );
 }
+EditCategoryPage.Layout = "Admin";
