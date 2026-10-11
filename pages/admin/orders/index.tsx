@@ -187,6 +187,37 @@ interface Order {
  affiliateCommission?: number;
  commissionAmount?: number;
  hasAffiliate?: boolean;
+ affiliateStore?: {
+  _id?: string;
+  affiliateId?:
+   | {
+      _id?: string;
+      name?: string;
+      email?: string;
+     }
+   | string;
+  storeId?:
+   | {
+      _id?: string;
+      name?: string;
+      slug?: string;
+     }
+   | string;
+  commissionRate?: number;
+ } | null;
+
+ affiliateCommissions?: Array<{
+  _id: string;
+  amount: number;
+  commissionRate: number;
+  commissionBase: number;
+  currency: string;
+  status: "PENDING" | "APPROVED" | "PAID" | "REVERSED";
+ }>;
+
+ affiliateCommissionTotal?: number;
+ affiliateCode?: string;
+ isDeleted?: boolean;
 }
 
 interface Pagination {
@@ -329,6 +360,29 @@ const getCreatedByName = (order: Order) => {
 
  return "—";
 };
+
+function getDisplayName(value: string | { name?: string; email?: string; storeName?: string } | null | undefined) {
+ if (!value) return "—";
+
+ if (typeof value === "string") return value;
+
+ return value.name || value.storeName || value.email || "—";
+}
+
+function getCommissionStatus(status?: string) {
+ switch (status) {
+  case "PENDING":
+   return "Pending";
+  case "APPROVED":
+   return "Approved";
+  case "PAID":
+   return "Paid";
+  case "REVERSED":
+   return "Reversed";
+  default:
+   return "—";
+ }
+}
 
 export default function OrdersPage() {
  const { data: session, status: sessionStatus } = useSession();
@@ -1282,16 +1336,20 @@ export default function OrdersPage() {
      ) : (
       <>
        <div className="w-full overflow-x-auto">
-        <table className="w-max min-w-[2200px] table-fixed text-left text-sm">
+        <table className="w-max min-w-[2800px] table-fixed text-left text-sm">
          <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
           <tr>
-           <th className="px-5 py-4 font-semibold">Order</th>
-           <th className="px-5 py-4 font-semibold">Customer</th>
-           <th className="px-5 py-4 font-semibold">Date</th>
-           <th className="px-5 py-4 font-semibold">Total</th>
-           <th className="px-5 py-4 font-semibold">Payment</th>
-           <th className="px-5 py-4 font-semibold">Order status</th>
-           <th className="px-5 py-4 text-right font-semibold">Actions</th>
+           <th className="w-[180px] px-5 py-4 font-semibold">Order</th>
+           <th className="w-[230px] px-5 py-4 font-semibold">Customer</th>
+           <th className="w-[250px] px-5 py-4 font-semibold">Products</th>
+           <th className="w-[200px] px-5 py-4 font-semibold">Affiliate</th>
+           <th className="w-[200px] px-5 py-4 font-semibold">Affiliate store</th>
+           <th className="w-[200px] px-5 py-4 font-semibold">Commission</th>
+           <th className="w-[180px] px-5 py-4 font-semibold">Date</th>
+           <th className="w-[180px] px-5 py-4 font-semibold">Total</th>
+           <th className="w-[220px] px-5 py-4 font-semibold">Payment</th>
+           <th className="w-[240px] px-5 py-4 font-semibold">Order status</th>
+           <th className="w-[300px] px-5 py-4 text-right font-semibold">Actions</th>
           </tr>
          </thead>
 
@@ -1299,26 +1357,173 @@ export default function OrdersPage() {
           {orders.map((order) => {
            const customer = getCustomer(order);
            const currentStatus = getOrderStatus(order);
-
            const nextStatuses = getForwardStatuses(currentStatus, statusOptions);
-
            const currency = order.currency || "VNĐ";
+
+           const items = order.items || [];
+
+           const affiliate = order.affiliateStore?.affiliateId || order.affiliateId || order.affiliateUserId;
+
+           const affiliateStore = order.affiliateStore?.storeId || order.affiliateStoreId;
+
+           const commissions = order.affiliateCommissions || [];
+
+           const commissionTotal = order.affiliateCommissionTotal ?? order.commissionAmount ?? order.affiliateCommission ?? 0;
+
+           const commissionStatuses = Array.from(new Set(commissions.map((commission) => commission.status)));
+
+           const affiliateName = typeof affiliate === "string" ? affiliate : affiliate?.name || affiliate?.email || "—";
+
+           const affiliateEmail = typeof affiliate === "object" && affiliate ? affiliate.email : undefined;
+
+           const affiliateStoreName =
+            typeof affiliateStore === "string"
+             ? affiliateStore
+             : affiliateStore && "name" in affiliateStore
+               ? affiliateStore.name || "—"
+               : affiliateStore && "storeName" in affiliateStore
+                 ? affiliateStore.storeName || "—"
+                 : "—";
 
            return (
             <tr key={order._id} className="hover:bg-gray-50/70">
+             {/* Order */}
              <td className="px-5 py-4 align-top">
               <button type="button" onClick={() => void openOrderDetail(order._id)} className="text-left font-semibold text-blue-700 hover:underline">
                {order.orderNumber || order._id}
               </button>
+
               <p className="mt-1 text-xs text-gray-400">ID: {order._id.slice(-8)}</p>
              </td>
 
+             {/* Customer */}
              <td className="max-w-[230px] px-5 py-4 align-top">
               <p className="font-medium text-gray-800">{customer.name || "Guest"}</p>
+
               <p className="mt-1 text-xs text-gray-500">{customer.phone || "No phone"}</p>
+
               {customer.email && <p className="mt-1 truncate text-xs text-gray-500">{customer.email}</p>}
+
+              {order.shippingAddress && (
+               <p className="mt-2 line-clamp-3 text-xs text-gray-500">
+                {[order.shippingAddress.address, order.shippingAddress.ward, order.shippingAddress.district, order.shippingAddress.province]
+                 .filter(Boolean)
+                 .join(", ") || "—"}
+               </p>
+              )}
              </td>
 
+             {/* Products */}
+             <td className="px-5 py-4 align-top">
+              {items.length === 0 ? (
+               <span className="text-gray-400">No products</span>
+              ) : (
+               <div className="space-y-3">
+                {items.slice(0, 2).map((item, index) => {
+                 const productName =
+                  item.productSnapshot?.name || (typeof item.productId === "object" && item.productId ? item.productId.name : undefined) || "Unnamed product";
+
+                 const quantity = Number(item.quantity || 1);
+
+                 return (
+                  <div key={item._id || `${order._id}-${index}`}>
+                   <p className="font-medium text-gray-800">{productName}</p>
+
+                   {item.productSnapshot?.sku && <p className="mt-1 text-xs text-gray-500">SKU: {item.productSnapshot.sku}</p>}
+
+                   <p className="mt-1 text-xs text-gray-500">Qty: {quantity}</p>
+
+                   {item.subtotal !== undefined && <p className="mt-1 text-xs text-gray-600">Subtotal: {formatPrice(Number(item.subtotal), currency)}</p>}
+                  </div>
+                 );
+                })}
+
+                {items.length > 2 && (
+                 <button type="button" onClick={() => void openOrderDetail(order._id)} className="text-xs font-semibold text-blue-700 hover:underline">
+                  +{items.length - 2} more products
+                 </button>
+                )}
+
+                <button type="button" onClick={() => void openOrderDetail(order._id)} className="block text-xs font-semibold text-blue-700 hover:underline">
+                 View all products
+                </button>
+               </div>
+              )}
+             </td>
+
+             {/* Affiliate */}
+             <td className="px-5 py-4 align-top">
+              {order.hasAffiliate || order.affiliateId || order.affiliateUserId || order.affiliateStore?.affiliateId ? (
+               <>
+                <p className="font-medium text-gray-800">{affiliateName}</p>
+
+                {affiliateEmail && <p className="mt-1 break-all text-xs text-gray-500">{affiliateEmail}</p>}
+
+                {order.affiliateCode && <p className="mt-1 text-xs text-gray-500">Code: {order.affiliateCode}</p>}
+               </>
+              ) : (
+               <span className="text-gray-400">No affiliate</span>
+              )}
+             </td>
+
+             {/* Affiliate store */}
+             <td className="px-5 py-4 align-top">
+              {affiliateStoreName !== "—" ? (
+               <>
+                <p className="font-medium text-gray-800">{affiliateStoreName}</p>
+
+                {order.affiliateStore?.commissionRate !== undefined && (
+                 <p className="mt-1 text-xs text-gray-500">Rate: {order.affiliateStore.commissionRate}%</p>
+                )}
+               </>
+              ) : (
+               <span className="text-gray-400">—</span>
+              )}
+             </td>
+
+             {/* Commission */}
+             <td className="px-5 py-4 align-top">
+              <p className="font-semibold text-gray-800">{formatPrice(Number(commissionTotal), currency)}</p>
+
+              {commissions.length > 0 ? (
+               <div className="mt-2 flex flex-wrap gap-1">
+                {commissionStatuses.map((status) => (
+                 <span
+                  key={status}
+                  className={`rounded-full px-2 py-1 text-xs font-medium ${
+                   status === "PAID"
+                    ? "bg-green-100 text-green-700"
+                    : status === "APPROVED"
+                      ? "bg-blue-100 text-blue-700"
+                      : status === "REVERSED"
+                        ? "bg-red-100 text-red-700"
+                        : "bg-yellow-100 text-yellow-700"
+                  }`}>
+                  {status === "PENDING"
+                   ? "Pending"
+                   : status === "APPROVED"
+                     ? "Approved"
+                     : status === "PAID"
+                       ? "Paid"
+                       : status === "REVERSED"
+                         ? "Reversed"
+                         : status}
+                 </span>
+                ))}
+               </div>
+              ) : (
+               <p className="mt-1 text-xs text-gray-400">{order.hasAffiliate || order.affiliateId || order.affiliateUserId ? "No commission records" : "—"}</p>
+              )}
+
+              {commissions.length > 0 && (
+               <p className="mt-1 text-xs text-gray-500">
+                {commissions.length} record
+                {commissions.length > 1 ? "s" : ""}
+               </p>
+              )}
+             </td>
+
+             {/* Date */}
              <td className="whitespace-nowrap px-5 py-4 align-top text-gray-600">
               <div className="flex items-center gap-2">
                <FaCalendarAlt className="text-gray-400" />
@@ -1326,10 +1531,12 @@ export default function OrdersPage() {
               </div>
              </td>
 
+             {/* Total */}
              <td className="whitespace-nowrap px-5 py-4 align-top">
               <span className="font-semibold">{formatPrice(Number(order.total || 0), currency)}</span>
              </td>
 
+             {/* Payment */}
              <td className="px-5 py-4 align-top">
               <p className="text-xs text-gray-500">{order.paymentMethod || "—"}</p>
 
@@ -1355,7 +1562,8 @@ export default function OrdersPage() {
               {updatingPaymentOrderId === order._id && <p className="mt-1 text-xs text-gray-500">Updating payment...</p>}
              </td>
 
-             <td className="min-w-[210px] px-5 py-4 align-top">
+             {/* Order status */}
+             <td className="px-5 py-4 align-top">
               <div className="flex items-center gap-2">
                <span
                 className="h-2.5 w-2.5 shrink-0 rounded-full"
@@ -1363,6 +1571,7 @@ export default function OrdersPage() {
                  backgroundColor: currentStatus?.color || "#6B7280",
                 }}
                />
+
                <span className="font-medium">{currentStatus?.name || "Unknown status"}</span>
               </div>
 
@@ -1391,30 +1600,34 @@ export default function OrdersPage() {
               )}
              </td>
 
-             <td className="px-5 py-4 text-right align-top flex gap-1">
-              <button
-               type="button"
-               onClick={() => handleDeleteOrder(order._id)}
-               disabled={deletingOrderId === order._id}
-               className="rounded-md bg-red-600 px-3 py-2 text-sm text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50">
-               {deletingOrderId === order._id ? "Đang xóa..." : "Xóa"}
-              </button>
-              <button
-               type="button"
-               onClick={() => void openOrderDetail(order._id)}
-               aria-label={`View order ${order.orderNumber || order._id}`}
-               className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-xs font-semibold hover:bg-gray-100">
-               <FaEye />
-               View details
-              </button>
+             {/* Actions */}
+             <td className="px-5 py-4 align-top">
+              <div className="flex flex-wrap justify-end gap-2">
+               <button
+                type="button"
+                onClick={() => handleDeleteOrder(order._id)}
+                disabled={deletingOrderId === order._id}
+                className="rounded-md bg-red-600 px-3 py-2 text-sm text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50">
+                {deletingOrderId === order._id ? "Đang xóa..." : "Xóa"}
+               </button>
 
-              <button
-               type="button"
-               onClick={() => void openEditOrder(order._id)}
-               className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100">
-               <FaEdit />
-               Edit
-              </button>
+               <button
+                type="button"
+                onClick={() => void openOrderDetail(order._id)}
+                aria-label={`View order ${order.orderNumber || order._id}`}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-xs font-semibold hover:bg-gray-100">
+                <FaEye />
+                View details
+               </button>
+
+               <button
+                type="button"
+                onClick={() => void openEditOrder(order._id)}
+                className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100">
+                <FaEdit />
+                Edit
+               </button>
+              </div>
              </td>
             </tr>
            );

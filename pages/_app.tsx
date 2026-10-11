@@ -7,6 +7,8 @@ import { useRouter } from "next/router";
 import { store } from "~/Redux/store";
 import { MyAppProps } from "~/layout/types";
 import { Layouts } from "~/layout/Layouts";
+import AffiliateTracker from "~/components/affiliate/AffiliateTracker";
+
 function App({ Component, pageProps }: MyAppProps) {
  const router = useRouter();
 
@@ -17,6 +19,8 @@ function App({ Component, pageProps }: MyAppProps) {
  return (
   <SessionProvider session={pageProps.session}>
    <Provider store={store}>
+    <AffiliateTracker />
+
     {isAdmin ? (
      <Layout>
       <Component {...pageProps} />

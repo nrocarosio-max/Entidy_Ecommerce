@@ -187,6 +187,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
      .populate("customerId")
      .populate("createdBy", "name email")
      .populate("storeId", "name slug")
+     .populate("affiliateId", "name email")
      .populate({
       path: "statusId",
       populate: {
@@ -232,8 +233,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     */
 
    const orderIds = orders.map((order) => order._id);
-
-   const affiliateIds = Array.from(new Set(orders.map((order) => (order.affiliateId ? order.affiliateId.toString() : null)).filter(Boolean)));
 
    const affiliateStoreIds = Array.from(new Set(orders.map((order) => (order.affiliateStoreId ? order.affiliateStoreId.toString() : null)).filter(Boolean)));
 
@@ -794,6 +793,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
      .populate("customerId")
      .populate("createdBy", "name email")
      .populate("storeId", "name slug")
+     .populate("affiliateId", "name email")
      .populate({
       path: "statusId",
       populate: {
