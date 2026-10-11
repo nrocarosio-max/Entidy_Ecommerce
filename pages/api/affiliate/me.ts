@@ -87,21 +87,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   const storeById = new Map(stores.map((store) => [store._id.toString(), store]));
 
-  const linkedStores = affiliateStores
-   .map((affiliateStore) => {
-    const store = storeById.get(affiliateStore.storeId.toString());
+  const linkedStores = affiliateStores.reduce<
+   {
+    id: string;
+    name: string;
+    code?: string;
+    commissionRate: number;
+    status: string;
+   }[]
+  >((result, affiliateStore) => {
+   const store = storeById.get(affiliateStore.storeId.toString());
 
-    if (!store) return null;
+   if (!store) {
+    return result;
+   }
 
-    return {
-     id: store._id.toString(),
-     name: store.name,
-     code: store.code,
-     commissionRate: affiliateStore.commissionRate,
-     status: affiliateStore.status,
-    };
-   })
-   .filter((store) => store !== null);
+   result.push({
+    id: store._id.toString(),
+    name: store.name,
+    code: store.code,
+    commissionRate: affiliateStore.commissionRate,
+    status: affiliateStore.status,
+   });
+
+   return result;
+  }, []);
 
   return res.status(200).json({
    success: true,
