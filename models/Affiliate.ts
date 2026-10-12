@@ -26,7 +26,11 @@ const AffiliateSchema = new Schema(
    required: true,
    index: true,
   },
-
+  totalClicks: {
+   type: Number,
+   default: 0,
+   min: 0,
+  },
   paymentInfo: {
    type: String,
    default: "",

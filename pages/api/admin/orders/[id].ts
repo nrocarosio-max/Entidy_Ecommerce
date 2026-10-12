@@ -579,83 +579,171 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
        await currentOrder.save({ session });
 
        /*
-        * Create commissions when the order reaches DELIVERED.
+        * Handle affiliate commissions when order status changes.
         */
-       if (newCode === "DELIVERED" && previousCode !== "DELIVERED") {
-        if (currentOrder.affiliateId && currentOrder.affiliateStoreId) {
-         const affiliateStore = await AffiliateStore.findOne({
-          _id: currentOrder.affiliateStoreId,
-          affiliateId: currentOrder.affiliateId,
-          storeId: currentOrder.storeId,
-         }).session(session);
+       if (previousCode !== newCode) {
+        const isDelivered = newCode === "DELIVERED";
+        const isCancelled = newCode === "CANCELLED";
+        const isReturned = newCode === "RETURNED";
 
-         if (!affiliateStore) {
-          throw new Error("AFFILIATE_STORE_NOT_FOUND");
-         }
+        if (isDelivered) {
+         if (currentOrder.affiliateId && currentOrder.affiliateStoreId) {
+          const affiliateStore = await AffiliateStore.findOne({
+           _id: currentOrder.affiliateStoreId,
+           affiliateId: currentOrder.affiliateId,
+           storeId: currentOrder.storeId,
+           status: "ACTIVE",
+          })
+           .session(session)
+           .lean();
 
-         const orderItems = await OrderItem.find({
-          orderId: currentOrder._id,
-         })
-          .session(session)
-          .lean();
-
-         const productIds = Array.from(new Set(orderItems.map((item) => String(item.productId))));
-
-         const productRates = await AffiliateProductRate.find({
-          affiliateId: currentOrder.affiliateId,
-          storeId: currentOrder.storeId,
-          productId: { $in: productIds },
-          status: "ACTIVE",
-         })
-          .session(session)
-          .lean();
-
-         const rateMap = new Map(productRates.map((rate) => [String(rate.productId), rate.commissionRate]));
-
-         const commissionDocuments = orderItems.map((item) => {
-          const commissionRate = rateMap.get(String(item.productId)) ?? affiliateStore.commissionRate;
-
-          const commissionBase = Number(item.subtotal);
-          const quantity = Number(item.quantity);
-
-          const amount = Math.round(((commissionBase * commissionRate) / 100) * 100) / 100;
-
-          if (
-           !Number.isFinite(commissionRate) ||
-           commissionRate < 0 ||
-           commissionRate > 100 ||
-           !Number.isFinite(commissionBase) ||
-           commissionBase < 0 ||
-           !Number.isInteger(quantity) ||
-           quantity < 1
-          ) {
-           throw new Error("INVALID_AFFILIATE_COMMISSION_DATA");
+          if (!affiliateStore) {
+           throw new Error("AFFILIATE_STORE_NOT_FOUND");
           }
 
-          return {
-           affiliateId: currentOrder.affiliateId,
-           affiliateStoreId: currentOrder.affiliateStoreId,
-           storeId: currentOrder.storeId,
+          const orderItems = await OrderItem.find({
            orderId: currentOrder._id,
-           orderItemId: item._id,
-           productId: item.productId,
-           productName: item.productSnapshot?.name || "",
-           quantity,
-           orderNumber: currentOrder.orderNumber,
-           commissionRate,
-           commissionBase,
-           amount,
-           currency: item.currency,
-           status: "PENDING",
-           note: "",
-          };
-         });
+          })
+           .session(session)
+           .lean();
 
-         if (commissionDocuments.length > 0) {
-          await AffiliateCommission.insertMany(commissionDocuments, {
-           session,
-           ordered: true,
-          });
+          const productIds = Array.from(new Set(orderItems.map((item) => String(item.productId))));
+
+          const productRates = await AffiliateProductRate.find({
+           affiliateId: currentOrder.affiliateId,
+           storeId: currentOrder.storeId,
+           productId: { $in: productIds },
+           status: "ACTIVE",
+          })
+           .session(session)
+           .lean();
+
+          const rateMap = new Map(productRates.map((rate) => [String(rate.productId), rate.commissionRate]));
+
+          // Include reversed commissions as existing records to prevent
+          // duplicate commission creation if the order is delivered again.
+          const existingCommissions = await AffiliateCommission.find({
+           orderId: currentOrder._id,
+           entryType: "COMMISSION",
+          })
+           .select("orderItemId")
+           .session(session)
+           .lean();
+
+          const existingItemIds = new Set(existingCommissions.map((commission) => String(commission.orderItemId)));
+
+          const commissionDocuments = [];
+
+          for (const item of orderItems) {
+           if (existingItemIds.has(String(item._id))) {
+            continue;
+           }
+
+           const commissionRate = rateMap.get(String(item.productId)) ?? affiliateStore.commissionRate;
+
+           const commissionBase = Number(item.subtotal);
+           const quantity = Number(item.quantity);
+
+           if (
+            !Number.isFinite(commissionRate) ||
+            commissionRate < 0 ||
+            commissionRate > 100 ||
+            !Number.isFinite(commissionBase) ||
+            commissionBase < 0 ||
+            !Number.isInteger(quantity) ||
+            quantity < 1
+           ) {
+            throw new Error("INVALID_AFFILIATE_COMMISSION_DATA");
+           }
+
+           const amount = Math.round((commissionBase * commissionRate * 100) / 100) / 100;
+
+           commissionDocuments.push({
+            affiliateId: currentOrder.affiliateId,
+            affiliateStoreId: currentOrder.affiliateStoreId,
+            storeId: currentOrder.storeId,
+            orderId: currentOrder._id,
+            orderItemId: item._id,
+            productId: item.productId,
+            productName: item.productSnapshot?.name || "",
+            quantity,
+            orderNumber: currentOrder.orderNumber,
+            commissionRate,
+            commissionBase,
+            amount,
+            currency: item.currency,
+            status: "PENDING",
+            entryType: "COMMISSION",
+            note: "",
+           });
+          }
+
+          if (commissionDocuments.length > 0) {
+           await AffiliateCommission.insertMany(commissionDocuments, {
+            session,
+            ordered: true,
+           });
+          }
+         }
+        }
+
+        if (isCancelled || isReturned) {
+         const adjustmentReason = isCancelled ? "CANCELLED" : "RETURNED";
+
+         const commissions = await AffiliateCommission.find({
+          orderId: currentOrder._id,
+          entryType: "COMMISSION",
+         }).session(session);
+
+         for (const commission of commissions) {
+          if (commission.status === "PENDING" || commission.status === "APPROVED") {
+           commission.status = "REVERSED";
+           commission.note = [commission.note, `Reversed because order was ${adjustmentReason.toLowerCase()}.`].filter(Boolean).join(" ");
+
+           await commission.save({ session });
+           continue;
+          }
+
+          // Paid commissions remain unchanged. Create a separate adjustment.
+          if (commission.status === "PAID") {
+           const existingAdjustment = await AffiliateCommission.findOne({
+            entryType: "ADJUSTMENT",
+            relatedCommissionId: commission._id,
+            adjustmentReason,
+           })
+            .session(session)
+            .lean();
+
+           if (existingAdjustment) {
+            continue;
+           }
+
+           await AffiliateCommission.create(
+            [
+             {
+              affiliateId: commission.affiliateId,
+              affiliateStoreId: commission.affiliateStoreId,
+              storeId: commission.storeId,
+              orderId: commission.orderId,
+              orderItemId: null,
+              productId: commission.productId,
+              productName: commission.productName,
+              quantity: commission.quantity,
+              orderNumber: commission.orderNumber,
+              relatedCommissionId: commission._id,
+              adjustmentReason,
+              commissionRate: commission.commissionRate,
+              commissionBase: commission.commissionBase,
+              amount: commission.amount,
+              currency: commission.currency,
+              status: "PENDING",
+              entryType: "ADJUSTMENT",
+              note: `Recovery adjustment for paid commission. Reason: ${adjustmentReason}.`,
+             },
+            ],
+            { session },
+           );
+          }
          }
         }
        }

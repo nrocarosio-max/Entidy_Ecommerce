@@ -17,8 +17,10 @@ const ALLOWED_TRANSITIONS: Record<CommissionStatus, CommissionStatus[]> = {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
  await connectDB();
 
+ let actor: Awaited<ReturnType<typeof requireSuperAdmin>>;
+
  try {
-  await requireSuperAdmin(req);
+  actor = await requireSuperAdmin(req);
  } catch {
   return res.status(403).json({
    success: false,
@@ -94,13 +96,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // A paid commission must never be reversed through this endpoint.
   // Handle payment disputes or clawbacks through a separate audited workflow.
-  const sessionUser = (
-   req as NextApiRequest & {
-    user?: { _id?: string; id?: string };
-   }
-  ).user;
-
-  const actorId = sessionUser?._id || sessionUser?.id;
+  const actorId = actor.id;
 
   if (status === "APPROVED") {
    if (!actorId || !mongoose.isValidObjectId(actorId)) {

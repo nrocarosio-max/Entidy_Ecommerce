@@ -33,6 +33,7 @@ interface Affiliate {
  status: "PENDING" | "ACTIVE" | "REJECTED" | "SUSPENDED";
  note?: string;
  createdAt: string;
+ totalClicks: number;
  stores: AffiliateStore[];
 }
 
@@ -397,6 +398,7 @@ export default function AffiliatesPage() {
        <tr>
         <th className="px-5 py-3 text-left text-xs font-semibold uppercase text-gray-500">Affiliate</th>
         <th className="px-5 py-3 text-left text-xs font-semibold uppercase text-gray-500">Referral Code</th>
+        <th className="px-5 py-3 text-left text-xs font-semibold uppercase text-gray-500">Total Clicks</th>
         <th className="px-5 py-3 text-left text-xs font-semibold uppercase text-gray-500">Stores / Commission</th>
         <th className="px-5 py-3 text-left text-xs font-semibold uppercase text-gray-500">Status</th>
         <th className="px-5 py-3 text-left text-xs font-semibold uppercase text-gray-500">Created At</th>
@@ -407,13 +409,13 @@ export default function AffiliatesPage() {
       <tbody className="divide-y divide-gray-100">
        {loading ? (
         <tr>
-         <td colSpan={6} className="px-5 py-12 text-center text-sm text-gray-500">
+         <td colSpan={7} className="px-5 py-12 text-center text-sm text-gray-500">
           Loading Affiliates...
          </td>
         </tr>
        ) : error ? (
         <tr>
-         <td colSpan={6} className="px-5 py-12 text-center text-sm text-red-600">
+         <td colSpan={7} className="px-5 py-12 text-center text-sm text-red-600">
           {error}
           <button type="button" onClick={loadAffiliates} className="ml-3 underline">
            Retry
@@ -422,7 +424,7 @@ export default function AffiliatesPage() {
         </tr>
        ) : affiliates.length === 0 ? (
         <tr>
-         <td colSpan={6} className="px-5 py-12 text-center text-sm text-gray-500">
+         <td colSpan={7} className="px-5 py-12 text-center text-sm text-gray-500">
           No Affiliates found.
          </td>
         </tr>
@@ -441,7 +443,9 @@ export default function AffiliatesPage() {
            <td className="px-5 py-4">
             <span className="rounded-md bg-gray-100 px-2.5 py-1 font-mono text-sm font-medium text-gray-800">{affiliate.code}</span>
            </td>
-
+           <td className="px-5 py-4">
+            <span className="font-semibold text-gray-900">{(affiliate.totalClicks ?? 0).toLocaleString("vi-VN")}</span>
+           </td>
            <td className="px-5 py-4">
             <div className="space-y-2">
              {affiliate.stores.map((affiliateStore) => {

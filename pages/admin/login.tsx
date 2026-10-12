@@ -11,12 +11,20 @@ export default function AdminLogin() {
  const [password, setPassword] = useState("");
  const [error, setError] = useState("");
  const [loading, setLoading] = useState(false);
+ function getRedirectPath(role?: string) {
+  if (role === "AFFILIATE") {
+   return "/affiliate";
+  }
 
+  return "/admin";
+ }
  useEffect(() => {
   if (status === "authenticated") {
-   router.replace("/admin");
+   const role = session?.user?.role as string | undefined;
+
+   router.replace(getRedirectPath(role));
   }
- }, [status, router]);
+ }, [status, session, router]);
 
  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
   event.preventDefault();
@@ -36,6 +44,13 @@ export default function AdminLogin() {
    setError("Invalid email or password.");
    return;
   }
+
+  const sessionResponse = await fetch("/api/auth/session");
+  const currentSession = await sessionResponse.json();
+
+  const role = currentSession?.user?.role as string | undefined;
+
+  router.replace(getRedirectPath(role));
 
   router.replace("/admin");
  }

@@ -3,14 +3,44 @@ import mongoose from "mongoose";
 
 import { connectDB } from "~/lib/mongodb";
 import { resolveAffiliate } from "~/lib/resolveAffiliate";
+import { createHash } from "crypto";
 
+import { AffiliateAttribution } from "~/models/AffiliateAttribution";
 import { Order } from "~/models/Order";
 import { OrderItem } from "~/models/OrderItem";
 import { OrderStatus } from "~/models/OrderStatus";
 import { Product } from "~/models/Product";
 import { Customer } from "~/models/Customer";
 import { Store } from "~/models/Store";
+const AFFILIATE_COOKIE_NAME = "affiliate_attribution";
 
+function getCookieValue(cookieHeader: string | undefined, name: string): string | null {
+ if (!cookieHeader) return null;
+
+ const cookies = cookieHeader.split(";");
+
+ for (let i = 0; i < cookies.length; i++) {
+  const separatorIndex = cookies[i].indexOf("=");
+
+  if (separatorIndex === -1) continue;
+
+  const key = cookies[i].slice(0, separatorIndex).trim();
+
+  if (key === name) {
+   try {
+    return decodeURIComponent(cookies[i].slice(separatorIndex + 1).trim());
+   } catch {
+    return null;
+   }
+  }
+ }
+
+ return null;
+}
+
+function hashAffiliateToken(token: string): string {
+ return createHash("sha256").update(token).digest("hex");
+}
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
  if (req.method !== "POST") {
   res.setHeader("Allow", ["POST"]);
@@ -38,7 +68,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    paymentMethod = "COD",
    note = "",
    shippingMethod = "",
-   affiliateCode = "",
   } = body;
 
   /*
@@ -186,11 +215,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     * --------------------------------------------------
     */
 
-   const affiliateAttribution = await resolveAffiliate({
-    affiliateCode: typeof affiliateCode === "string" ? affiliateCode : "",
-    storeId,
-    session,
-   });
+   let affiliateAttribution = null;
+
+   const affiliateToken = getCookieValue(req.headers.cookie, AFFILIATE_COOKIE_NAME);
+
+   if (affiliateToken && /^[a-f0-9]{64}$/i.test(affiliateToken)) {
+    const now = new Date();
+
+    const attributionDocument = await AffiliateAttribution.findOne({
+     tokenHash: hashAffiliateToken(affiliateToken),
+     expiresAt: { $gt: now },
+     pendingExpiresAt: { $gt: now },
+    })
+     .session(session)
+     .lean();
+
+    if (attributionDocument?.pendingAffiliateCode) {
+     try {
+      affiliateAttribution = await resolveAffiliate({
+       affiliateCode: attributionDocument.pendingAffiliateCode,
+       storeId,
+       session,
+      });
+     } catch (error: any) {
+      const message = typeof error?.message === "string" ? error.message : "";
+
+      if (message !== "Affiliate code is invalid or inactive." && message !== "This affiliate is not active for this store.") {
+       throw error;
+      }
+
+      // Ignore invalid or inactive attribution.
+      // The customer order can still proceed without an affiliate.
+     }
+    }
+   }
 
    /*
     * --------------------------------------------------

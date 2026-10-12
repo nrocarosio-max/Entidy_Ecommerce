@@ -112,6 +112,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
    const results = affiliates.map((affiliate) => ({
     ...affiliate,
+    totalClicks: affiliate.totalClicks ?? 0,
     stores: storesByAffiliate.get(String(affiliate._id)) || [],
    }));
 

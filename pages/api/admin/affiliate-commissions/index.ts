@@ -3,7 +3,8 @@ import mongoose from "mongoose";
 
 import { connectDB } from "~/lib/mongodb";
 import { requireSuperAdmin } from "~/lib/permissions";
-
+import { Order } from "~/models/Order";
+import { OrderItem } from "~/models/OrderItem";
 import { AffiliateCommission } from "~/models/AffiliateCommission";
 import { Affiliate } from "~/models/Affiliate";
 import { Product } from "~/models/Product";
@@ -130,10 +131,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
      path: "storeId",
      select: "name slug",
     })
+
     .populate({
      path: "orderId",
-     select: "orderNumber code status totalAmount",
+     select: "orderNumber code status statusId totalAmount",
+     populate: {
+      path: "statusId",
+      select: "name code color",
+     },
     })
+
     .populate({
      path: "productId",
      select: "name slug",

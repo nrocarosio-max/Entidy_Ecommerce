@@ -21,11 +21,20 @@ interface PopulatedStore {
  slug?: string;
 }
 
+interface PopulatedOrderStatus {
+ _id?: string;
+ name?: string;
+ code?: string;
+ color?: string;
+}
+
 interface PopulatedOrder {
  _id?: string;
  orderNumber?: string;
  code?: string;
- status?: string;
+ status?: string | PopulatedOrderStatus | null;
+ statusId?: PopulatedOrderStatus | string | null;
+ total?: number;
  totalAmount?: number;
 }
 
@@ -83,7 +92,12 @@ const STATUS_OPTIONS = [
  { value: "PAID", label: "Đã thanh toán" },
  { value: "REVERSED", label: "Đã hoàn tác" },
 ];
-
+const ALLOWED_TRANSITIONS: Record<string, string[]> = {
+ PENDING: ["APPROVED", "REVERSED"],
+ APPROVED: ["PAID", "REVERSED"],
+ PAID: [],
+ REVERSED: [],
+};
 const EMPTY_PAGINATION: Pagination = {
  page: 1,
  limit: 10,
@@ -200,7 +214,10 @@ export default function AffiliateCommissionsPage() {
 
  const [loading, setLoading] = useState(false);
  const [error, setError] = useState("");
-
+ const [updatingId, setUpdatingId] = useState("");
+ const [selectedStatuses, setSelectedStatuses] = useState<Record<string, string>>({});
+ const [actionMessage, setActionMessage] = useState("");
+ const [actionError, setActionError] = useState("");
  const loadCommissions = useCallback(async () => {
   if (sessionStatus !== "authenticated") return;
 
@@ -249,6 +266,62 @@ export default function AffiliateCommissionsPage() {
  useEffect(() => {
   void loadCommissions();
  }, [loadCommissions]);
+
+ const handleUpdateCommissionStatus = async (commission: AffiliateCommissionItem) => {
+  const nextStatus = selectedStatuses[commission._id];
+
+  if (!nextStatus || nextStatus === commission.status) {
+   return;
+  }
+
+  const allowedStatuses = ALLOWED_TRANSITIONS[commission.status || ""] || [];
+
+  if (!allowedStatuses.includes(nextStatus)) {
+   setActionError("Không thể chuyển sang trạng thái hoa hồng đã chọn.");
+   setActionMessage("");
+   return;
+  }
+
+  try {
+   setUpdatingId(commission._id);
+   setActionError("");
+   setActionMessage("");
+
+   const response = await fetch(`/api/admin/affiliate-commissions/${commission._id}`, {
+    method: "PATCH",
+    headers: {
+     "Content-Type": "application/json",
+     Accept: "application/json",
+    },
+    body: JSON.stringify({
+     status: nextStatus,
+    }),
+   });
+
+   const result = (await response.json()) as {
+    success?: boolean;
+    message?: string;
+   };
+
+   if (!response.ok || !result.success) {
+    throw new Error(result.message || "Không thể cập nhật trạng thái hoa hồng.");
+   }
+
+   setActionMessage("Cập nhật trạng thái hoa hồng thành công.");
+
+   setSelectedStatuses((current) => {
+    const next = { ...current };
+    delete next[commission._id];
+    return next;
+   });
+
+   await loadCommissions();
+  } catch (err) {
+   setActionError(err instanceof Error ? err.message : "Đã xảy ra lỗi khi cập nhật trạng thái hoa hồng.");
+  } finally {
+   setUpdatingId("");
+  }
+ };
 
  const handleSearch = (event: FormEvent<HTMLFormElement>) => {
   event.preventDefault();
@@ -385,6 +458,18 @@ export default function AffiliateCommissionsPage() {
      </div>
     )}
 
+    {actionMessage && (
+     <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">
+      {actionMessage}
+     </div>
+    )}
+
+    {actionError && (
+     <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+      {actionError}
+     </div>
+    )}
+
     <section className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
      <div className="flex flex-col justify-between gap-3 border-b border-gray-200 px-4 py-4 sm:flex-row sm:items-center md:px-5">
       <div>
@@ -419,6 +504,7 @@ export default function AffiliateCommissionsPage() {
          <th className="px-4 py-3 text-right font-semibold">Tỷ lệ</th>
          <th className="px-4 py-3 text-right font-semibold">Hoa hồng</th>
          <th className="px-4 py-3 font-semibold">Trạng thái</th>
+         <th className="px-4 py-3 font-semibold">Thao tác</th>
          <th className="px-4 py-3 font-semibold">Ngày tạo</th>
         </tr>
        </thead>
@@ -426,13 +512,13 @@ export default function AffiliateCommissionsPage() {
        <tbody className="divide-y divide-gray-100">
         {loading && commissions.length === 0 ? (
          <tr>
-          <td colSpan={9} className="px-4 py-16 text-center text-gray-500">
+          <td colSpan={10} className="px-4 py-16 text-center text-gray-500">
            Đang tải danh sách hoa hồng...
           </td>
          </tr>
         ) : commissions.length === 0 ? (
          <tr>
-          <td colSpan={9} className="px-4 py-16 text-center text-gray-500">
+          <td colSpan={10} className="px-4 py-16 text-center text-gray-500">
            Không tìm thấy bản ghi hoa hồng phù hợp.
           </td>
          </tr>
@@ -467,7 +553,25 @@ export default function AffiliateCommissionsPage() {
 
             <td className="px-4 py-4">
              <div className="font-medium text-blue-700">{orderNumber || "—"}</div>
-             {order?.status && <div className="mt-1 text-xs text-gray-500">{order.status}</div>}
+
+             {(() => {
+              const orderStatus =
+               typeof order?.statusId === "object" && order.statusId
+                ? order.statusId.name || order.statusId.code || ""
+                : typeof order?.status === "object" && order.status
+                  ? order.status.name || order.status.code || ""
+                  : typeof order?.status === "string"
+                    ? order.status
+                    : typeof order?.statusId === "string"
+                      ? order.statusId
+                      : "";
+
+              return orderStatus ? (
+               <div className="mt-1 text-xs text-gray-500">Trạng thái đơn: {orderStatus}</div>
+              ) : (
+               <div className="mt-1 text-xs text-gray-400">Chưa có trạng thái đơn hàng</div>
+              );
+             })()}
             </td>
 
             <td className="px-4 py-4">
@@ -493,6 +597,49 @@ export default function AffiliateCommissionsPage() {
              <span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClass(commission.status)}`}>
               {getStatusLabel(commission.status)}
              </span>
+            </td>
+
+            <td className="px-4 py-4">
+             {(() => {
+              const allowedStatuses = ALLOWED_TRANSITIONS[commission.status || ""] || [];
+
+              const selectedStatus = selectedStatuses[commission._id] || "";
+
+              return allowedStatuses.length > 0 ? (
+               <div className="flex min-w-[210px] flex-col gap-2">
+                <select
+                 aria-label={`Trạng thái mới của hoa hồng ${commission._id}`}
+                 value={selectedStatus}
+                 disabled={updatingId === commission._id}
+                 onChange={(event) => {
+                  setSelectedStatuses((current) => ({
+                   ...current,
+                   [commission._id]: event.target.value,
+                  }));
+                  setActionMessage("");
+                  setActionError("");
+                 }}
+                 className="rounded-lg border border-gray-300 bg-white px-2 py-2 text-sm outline-none focus:border-blue-500 disabled:opacity-50">
+                 <option value="">Chọn trạng thái mới</option>
+                 {allowedStatuses.map((status) => (
+                  <option key={status} value={status}>
+                   {getStatusLabel(status)}
+                  </option>
+                 ))}
+                </select>
+
+                <button
+                 type="button"
+                 disabled={!selectedStatus || selectedStatus === commission.status || updatingId === commission._id}
+                 onClick={() => void handleUpdateCommissionStatus(commission)}
+                 className="rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-40">
+                 {updatingId === commission._id ? "Đang cập nhật..." : "Cập nhật"}
+                </button>
+               </div>
+              ) : (
+               <span className="text-xs text-gray-400">Không thể chuyển trạng thái</span>
+              );
+             })()}
             </td>
 
             <td className="whitespace-nowrap px-4 py-4 text-gray-600">{formatDate(commission.createdAt)}</td>

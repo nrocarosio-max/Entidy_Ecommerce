@@ -97,7 +97,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     message: "This affiliate has no active stores.",
    });
   }
-
+  // Increment the total affiliate click count atomically.
+  await Affiliate.updateOne({ _id: affiliate._id }, { $inc: { totalClicks: 1 } });
   const now = new Date();
   const expiresAt = new Date(now.getTime() + ATTRIBUTION_MS);
 

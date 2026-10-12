@@ -31,7 +31,7 @@ const AffiliateCommissionSchema = new Schema(
   orderItemId: {
    type: Schema.Types.ObjectId,
    ref: "OrderItem",
-   required: true,
+   default: null,
   },
 
   productId: {
@@ -57,6 +57,18 @@ const AffiliateCommissionSchema = new Schema(
    type: String,
    default: "",
    trim: true,
+  },
+  relatedCommissionId: {
+   type: Schema.Types.ObjectId,
+   ref: "AffiliateCommission",
+   default: null,
+   index: true,
+  },
+
+  adjustmentReason: {
+   type: String,
+   enum: ["CANCELLED", "RETURNED"],
+   default: null,
   },
 
   // Commission rate captured when the commission is created.
@@ -111,7 +123,13 @@ const AffiliateCommissionSchema = new Schema(
    type: Date,
    default: null,
   },
-
+  entryType: {
+   type: String,
+   enum: ["COMMISSION", "ADJUSTMENT"],
+   default: "COMMISSION",
+   required: true,
+   index: true,
+  },
   note: {
    type: String,
    default: "",
@@ -124,7 +142,16 @@ const AffiliateCommissionSchema = new Schema(
 );
 
 // Prevent duplicate commission records for the same order item.
-AffiliateCommissionSchema.index({ orderId: 1, orderItemId: 1 }, { unique: true });
+AffiliateCommissionSchema.index(
+ { orderId: 1, orderItemId: 1 },
+ {
+  unique: true,
+  partialFilterExpression: {
+   entryType: "COMMISSION",
+   orderItemId: { $type: "objectId" },
+  },
+ },
+);
 
 AffiliateCommissionSchema.index({
  affiliateId: 1,
@@ -137,5 +164,15 @@ AffiliateCommissionSchema.index({
  status: 1,
  createdAt: -1,
 });
-
+AffiliateCommissionSchema.index(
+ { relatedCommissionId: 1, adjustmentReason: 1 },
+ {
+  unique: true,
+  partialFilterExpression: {
+   entryType: "ADJUSTMENT",
+   relatedCommissionId: { $type: "objectId" },
+   adjustmentReason: { $in: ["CANCELLED", "RETURNED"] },
+  },
+ },
+);
 export const AffiliateCommission = models.AffiliateCommission || mongoose.model("AffiliateCommission", AffiliateCommissionSchema);

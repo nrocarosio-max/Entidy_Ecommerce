@@ -102,7 +102,7 @@ const menuItems: MenuItem[] = [
 
 const affiliateMenuItems: MenuItem[] = [
  {
-  label: "Affiliates",
+  label: "Affiliates User",
   href: "/admin/affiliates",
   icon: FaUserTie,
   permission: "affiliates.read",
