@@ -1,8 +1,5 @@
 "use client";
 
-import Link from "next/link";
-import { useState } from "react";
-import { FaHeart } from "react-icons/fa";
 import { CityChainWatch } from "~/data/CityChainWatch";
 interface WatchesYouMayLikeProps {
  watch: CityChainWatch;
