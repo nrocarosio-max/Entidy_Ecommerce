@@ -36,7 +36,7 @@ interface AffiliateLayoutProps {
 }
 
 const CLIENT_URL = process.env.NEXT_PUBLIC_CLIENT_URL || "/";
-const LOGIN_URL = "/affiliate/login";
+const LOGIN_URL = "/admin/login";
 
 export default function AffiliateLayout({ children }: AffiliateLayoutProps) {
  const router = useRouter();

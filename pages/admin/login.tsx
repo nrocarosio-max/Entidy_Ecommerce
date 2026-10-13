@@ -12,11 +12,19 @@ export default function AdminLogin() {
  const [error, setError] = useState("");
  const [loading, setLoading] = useState(false);
  function getRedirectPath(role?: string) {
+  if (role === "SUPER_ADMIN") {
+   return "/admin";
+  }
+
   if (role === "AFFILIATE") {
    return "/affiliate";
   }
 
-  return "/admin";
+  if (role) {
+   return "/pos";
+  }
+
+  return "/admin/login";
  }
  useEffect(() => {
   if (status === "authenticated") {
@@ -32,27 +40,40 @@ export default function AdminLogin() {
   setError("");
   setLoading(true);
 
-  const result = await signIn("credentials", {
-   email,
-   password,
-   redirect: false,
-  });
+  try {
+   const result = await signIn("credentials", {
+    email,
+    password,
+    redirect: false,
+   });
 
-  setLoading(false);
+   if (!result?.ok || result.error) {
+    setError("Invalid email or password.");
+    return;
+   }
 
-  if (!result?.ok) {
-   setError("Invalid email or password.");
-   return;
+   const sessionResponse = await fetch("/api/auth/session", {
+    cache: "no-store",
+   });
+
+   const currentSession = await sessionResponse.json();
+
+   const role = currentSession?.user?.role as string | undefined;
+
+   if (!role) {
+    setError("Unable to determine your account role. Please sign in again.");
+    return;
+   }
+
+   const redirectPath = role === "AFFILIATE" ? "/affiliate" : "/admin";
+
+   await router.replace(redirectPath);
+  } catch (error) {
+   console.error("LOGIN ERROR:", error);
+   setError("An error occurred while signing in. Please try again.");
+  } finally {
+   setLoading(false);
   }
-
-  const sessionResponse = await fetch("/api/auth/session");
-  const currentSession = await sessionResponse.json();
-
-  const role = currentSession?.user?.role as string | undefined;
-
-  router.replace(getRedirectPath(role));
-
-  router.replace("/admin");
  }
 
  if (status === "loading") {

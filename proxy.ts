@@ -2,11 +2,21 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
 
+const LOGIN_PAGE = "/admin/login";
+
 export async function proxy(req: NextRequest) {
  const { pathname } = req.nextUrl;
 
- // Keep the login page accessible without authentication.
- if (pathname === "/admin/login" || pathname.startsWith("/admin/login/")) {
+ const isAdminRoute = pathname === "/admin" || pathname.startsWith("/admin/");
+ const isPosRoute = pathname === "/pos" || pathname.startsWith("/pos/");
+ const isAffiliateRoute = pathname === "/affiliate" || pathname.startsWith("/affiliate/");
+
+ if (!isAdminRoute && !isPosRoute && !isAffiliateRoute) {
+  return NextResponse.next();
+ }
+
+ // Keep the shared login page accessible.
+ if (pathname === LOGIN_PAGE || pathname.startsWith(`${LOGIN_PAGE}/`)) {
   return NextResponse.next();
  }
 
@@ -15,22 +25,40 @@ export async function proxy(req: NextRequest) {
   secret: process.env.AUTH_SECRET,
  });
 
- // Redirect unauthenticated visitors to the admin login page.
+ // All protected areas use the same login page.
  if (!token?.id) {
-  const loginUrl = new URL("/admin/login", req.url);
-  loginUrl.searchParams.set("callbackUrl", req.url);
+  const loginUrl = new URL(LOGIN_PAGE, req.url);
+
+  loginUrl.searchParams.set("callbackUrl", `${pathname}${req.nextUrl.search}`);
 
   return NextResponse.redirect(loginUrl);
  }
 
- // Only SUPER_ADMIN can access the admin area.
- if (token.role !== "SUPER_ADMIN") {
-  return NextResponse.redirect(new URL("/", req.url));
+ const role = token.role as string | undefined;
+
+ // SUPER_ADMIN can only access /admin.
+ if (isAdminRoute && role !== "SUPER_ADMIN") {
+  return NextResponse.redirect(new URL(role === "AFFILIATE" ? "/affiliate" : "/pos", req.url));
+ }
+
+ // SUPER_ADMIN cannot access /pos.
+ if (isPosRoute && role === "SUPER_ADMIN") {
+  return NextResponse.redirect(new URL("/admin", req.url));
+ }
+
+ // AFFILIATE cannot access /pos.
+ if (isPosRoute && role === "AFFILIATE") {
+  return NextResponse.redirect(new URL("/affiliate", req.url));
+ }
+
+ // Only AFFILIATE can access /affiliate.
+ if (isAffiliateRoute && role !== "AFFILIATE") {
+  return NextResponse.redirect(new URL(role === "SUPER_ADMIN" ? "/admin" : "/pos", req.url));
  }
 
  return NextResponse.next();
 }
 
 export const config = {
- matcher: ["/admin/:path*"],
+ matcher: ["/admin/:path*", "/pos/:path*", "/affiliate/:path*"],
 };
