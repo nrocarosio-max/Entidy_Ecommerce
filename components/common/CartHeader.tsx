@@ -13,7 +13,7 @@ export default function CartHeader() {
 
  const getCartFromStorage = () => {
   const savedCart = localStorage.getItem("ecommerce_cart");
-
+  console.log("ccc", savedCart);
   if (savedCart) {
    try {
     setCart(JSON.parse(savedCart));
@@ -119,32 +119,42 @@ export default function CartHeader() {
           </div>
          ) : (
           <div className="space-y-5">
-           {cart.map((item, index) => (
-            <div key={`${item.id}-${index}`} className="flex gap-4 border-b border-gray-100 pb-5">
-             {/* IMAGE */}
-             <div
-              className="h-24 w-20 shrink-0 bg-contain bg-center bg-no-repeat md:h-28 md:w-24"
-              style={{
-               backgroundImage: `url(${item.image || item.images?.main || ""})`,
-              }}
-             />
+           {cart.map((item, index) => {
+            const product = item.product || item;
+            const quantity = item.quantity || 1;
 
-             {/* INFO */}
-             <div className="min-w-0 flex-1">
-              <h3 className="text-sm font-bold text-[#303234]">{item.name}</h3>
+            const image = Array.isArray(product.images) ? product.images[0] : product.image || product.images?.main || "";
 
-              {item.title && <p className="mt-1 text-xs leading-relaxed text-gray-500">{item.title}</p>}
+            const price = product.priceNew ?? product.price ?? 0;
+            const currency = product.currency || "VND";
 
-              <div className="mt-4 flex items-end justify-between gap-3">
-               <span className="text-sm text-gray-500">Quantity: {item.quantity}</span>
+            return (
+             <div key={`${product._id || product.id}-${index}`} className="flex gap-4 border-b border-gray-100 pb-5">
+              {/* IMAGE */}
+              <div
+               className="h-24 w-20 shrink-0 bg-contain bg-center bg-no-repeat md:h-28 md:w-24"
+               style={{
+                backgroundImage: `url(${image})`,
+               }}
+              />
 
-               <span className="text-right text-sm font-bold text-[#303234]">
-                {item.currency || "MYR"} {((item.priceNew || item.price || 0) * (item.quantity || 1)).toLocaleString()}
-               </span>
+              {/* INFO */}
+              <div className="min-w-0 flex-1">
+               <h3 className="text-sm font-bold text-[#303234]">{product.name}</h3>
+
+               {product.sku && <p className="mt-1 text-xs leading-relaxed text-gray-500">SKU: {product.sku}</p>}
+
+               <div className="mt-4 flex items-end justify-between gap-3">
+                <span className="text-sm text-gray-500">Quantity: {quantity}</span>
+
+                <span className="text-right text-sm font-bold text-[#303234]">
+                 {currency} {(price * quantity).toLocaleString("vi-VN")}
+                </span>
+               </div>
               </div>
              </div>
-            </div>
-           ))}
+            );
+           })}
           </div>
          )}
         </div>
