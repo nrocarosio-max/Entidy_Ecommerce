@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { useRouter } from "next/router";
-import { FaSearch, FaEye, FaSyncAlt, FaFilter, FaChevronLeft, FaChevronRight, FaShoppingBag } from "react-icons/fa";
+import { FaSearch, FaEye, FaSyncAlt, FaFilter, FaChevronLeft, FaChevronRight, FaShoppingBag, FaEdit } from "react-icons/fa";
 
 interface OrderStatus {
  _id: string;
@@ -9,6 +9,9 @@ interface OrderStatus {
  code: string;
  color?: string;
  sortOrder?: number;
+ isActive?: boolean;
+ isFinal?: boolean;
+ nextStatusIds?: string[];
 }
 
 interface Customer {
@@ -18,36 +21,76 @@ interface Customer {
  nameNormalized?: string;
 }
 
+interface OrderItem {
+ _id: string;
+ productId: string;
+ productSnapshot?: {
+  name?: string;
+  sku?: string;
+  slug?: string;
+  image?: string;
+ };
+ quantity: number;
+ price: number;
+ subtotal: number;
+ currency?: string;
+}
+
 interface Order {
  _id: string;
  orderNumber: string;
- customerId?: Customer | null;
+
+ customerId?:
+  | {
+     _id: string;
+     name?: string;
+     phone?: string;
+    }
+  | string
+  | null;
+
  customerSnapshot?: {
   name?: string;
   phone?: string;
   email?: string;
  };
+
+ shippingAddress?: {
+  province?: string;
+  district?: string;
+  ward?: string;
+  address?: string;
+  postalCode?: string;
+ };
+
  statusId?: OrderStatus | string | null;
+
  subtotal: number;
  shippingFee: number;
  discount: number;
  total: number;
  currency: string;
+
  paymentMethod: string;
  paymentStatus: string;
+
+ note?: string;
+ shippingMethod?: string;
+ trackingNumber?: string;
+
  createdAt: string;
+ updatedAt?: string;
+
+ items?: OrderItem[];
 }
 
 interface OrdersResponse {
- success: boolean;
- message?: string;
- data?: Order[];
- pagination?: {
-  page: number;
-  limit: number;
-  total: number;
-  totalPages: number;
- };
+ orders: Order[];
+ statuses: OrderStatus[];
+ total: number;
+ page: number;
+ limit: number;
+ totalPages: number;
 }
 
 const PAYMENT_OPTIONS = [
@@ -57,6 +100,47 @@ const PAYMENT_OPTIONS = [
  { value: "FAILED", label: "Thanh toán thất bại" },
  { value: "REFUNDED", label: "Đã hoàn tiền" },
 ];
+
+const PAYMENT_STATUS_OPTIONS = [
+ {
+  value: "PENDING",
+  label: "Chờ thanh toán",
+  color: "#92400e",
+  background: "#fef3c7",
+ },
+ {
+  value: "PAID",
+  label: "Đã thanh toán",
+  color: "#166534",
+  background: "#dcfce7",
+ },
+ {
+  value: "FAILED",
+  label: "Thanh toán thất bại",
+  color: "#991b1b",
+  background: "#fee2e2",
+ },
+ {
+  value: "REFUNDED",
+  label: "Đã hoàn tiền",
+  color: "#6b21a8",
+  background: "#f3e8ff",
+ },
+] as const;
+
+function getPaymentStatusLabel(status: string) {
+ return PAYMENT_STATUS_OPTIONS.find((option) => option.value === status)?.label ?? status;
+}
+
+function formatDateTime(value?: string) {
+ if (!value) return "—";
+
+ const date = new Date(value);
+
+ if (Number.isNaN(date.getTime())) return "—";
+
+ return date.toLocaleString("vi-VN");
+}
 
 const getStatus = (statusId?: Order["statusId"]) => {
  if (!statusId || typeof statusId === "string") {
@@ -103,10 +187,14 @@ const formatMoney = (amount: number, currency: string) => {
 const formatDate = (value: string) => {
  if (!value) return "—";
 
+ const date = new Date(value);
+
+ if (Number.isNaN(date.getTime())) return "—";
+
  return new Intl.DateTimeFormat("vi-VN", {
   dateStyle: "short",
   timeStyle: "short",
- }).format(new Date(value));
+ }).format(date);
 };
 
 export default function PosOrdersPage() {
@@ -126,7 +214,8 @@ export default function PosOrdersPage() {
 
  const [loading, setLoading] = useState(true);
  const [error, setError] = useState("");
-
+ const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
+ const [updatingPaymentOrderId, setUpdatingPaymentOrderId] = useState<string | null>(null);
  const fetchOrders = useCallback(async () => {
   setLoading(true);
   setError("");
@@ -137,8 +226,12 @@ export default function PosOrdersPage() {
     limit: String(limit),
    });
 
-   if (search) params.set("search", search);
+   if (search) params.set("keyword", search);
+
+   // Giữ bộ lọc thanh toán hiện tại.
+   // API danh sách cần hỗ trợ paymentStatus thì bộ lọc này mới có hiệu lực.
    if (paymentStatus) params.set("paymentStatus", paymentStatus);
+
    if (statusId) params.set("statusId", statusId);
 
    const response = await fetch(`/api/pos/orders?${params.toString()}`, {
@@ -146,34 +239,21 @@ export default function PosOrdersPage() {
     credentials: "include",
    });
 
-   const result: OrdersResponse = await response.json();
+   const result = (await response.json()) as OrdersResponse | { message?: string };
 
-   if (!response.ok || !result.success) {
-    throw new Error(result.message || "Không thể tải danh sách đơn hàng.");
+   if (!response.ok) {
+    throw new Error(("message" in result && result.message) || `Lỗi tải đơn hàng (HTTP ${response.status}).`);
    }
 
-   setOrders(result.data || []);
-   setTotal(result.pagination?.total || 0);
-   setTotalPages(Math.max(1, result.pagination?.totalPages || 1));
+   const data = result as OrdersResponse;
+   const orderList = Array.isArray(data.orders) ? data.orders : [];
+   const statusList = Array.isArray(data.statuses) ? data.statuses : [];
 
-   const uniqueStatuses = new Map<string, OrderStatus>();
+   setOrders(orderList);
+   setTotal(Number(data.total) || 0);
+   setTotalPages(Math.max(1, Number(data.totalPages) || 1));
 
-   (result.data || []).forEach((order) => {
-    const status = order.statusId;
-
-    if (status && typeof status !== "string" && status._id) {
-     uniqueStatuses.set(status._id, status);
-    }
-   });
-
-   setStatuses((current) => {
-    const merged = new Map<string, OrderStatus>();
-
-    current.forEach((status) => merged.set(status._id, status));
-    uniqueStatuses.forEach((status) => merged.set(status._id, status));
-
-    return Array.from(merged.values()).sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
-   });
+   setStatuses([...statusList].sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0)));
   } catch (err: unknown) {
    setError(err instanceof Error ? err.message : "Đã xảy ra lỗi khi tải đơn hàng.");
   } finally {
@@ -185,10 +265,91 @@ export default function PosOrdersPage() {
   void fetchOrders();
  }, [fetchOrders]);
 
+ const handleStatusChange = async (order: Order, nextStatusId: string) => {
+  const previousStatusId = typeof order.statusId === "string" ? order.statusId : order.statusId?._id || "";
+
+  if (!nextStatusId || nextStatusId === previousStatusId || updatingOrderId !== null) {
+   return;
+  }
+
+  try {
+   setUpdatingOrderId(order._id);
+   setError("");
+
+   const response = await fetch(`/api/pos/orders/${order._id}/status`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: {
+     "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+     statusId: nextStatusId,
+    }),
+   });
+
+   const result = await response.json();
+
+   if (!response.ok) {
+    throw new Error(result.message || "Không thể cập nhật trạng thái đơn hàng.");
+   }
+
+   await fetchOrders();
+  } catch (err: unknown) {
+   alert(err instanceof Error ? err.message : "Đã xảy ra lỗi khi cập nhật trạng thái.");
+
+   await fetchOrders();
+  } finally {
+   setUpdatingOrderId(null);
+  }
+ };
+
+ const handlePaymentStatusChange = async (order: Order, nextPaymentStatus: string) => {
+  if (!PAYMENT_STATUS_OPTIONS.some((option) => option.value === nextPaymentStatus)) {
+   return;
+  }
+
+  if (nextPaymentStatus === order.paymentStatus) {
+   return;
+  }
+
+  setUpdatingPaymentOrderId(order._id);
+
+  try {
+   const response = await fetch(`/api/pos/orders/${order._id}/payment-status`, {
+    method: "PATCH",
+    headers: {
+     "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+     paymentStatus: nextPaymentStatus,
+    }),
+   });
+
+   const result = await response.json();
+
+   if (!response.ok) {
+    throw new Error(result.message || "Không thể cập nhật trạng thái thanh toán.");
+   }
+
+   await fetchOrders();
+  } catch (error) {
+   console.error(error);
+
+   alert(error instanceof Error ? error.message : "Đã xảy ra lỗi khi cập nhật thanh toán.");
+  } finally {
+   setUpdatingPaymentOrderId(null);
+  }
+ };
+
  const handleSearch = (event: FormEvent<HTMLFormElement>) => {
   event.preventDefault();
   setPage(1);
   setSearch(searchInput.trim());
+ };
+
+ const handleStatusFilterChange = (value: string) => {
+  setPage(1);
+  setStatusId(value);
  };
 
  const handlePaymentChange = (value: string) => {
@@ -196,9 +357,12 @@ export default function PosOrdersPage() {
   setPaymentStatus(value);
  };
 
- const handleStatusChange = (value: string) => {
+ const handleClearFilters = () => {
+  setSearchInput("");
+  setSearch("");
+  setPaymentStatus("");
+  setStatusId("");
   setPage(1);
-  setStatusId(value);
  };
 
  const goToDetail = (id: string) => {
@@ -284,7 +448,7 @@ export default function PosOrdersPage() {
 
      <select
       value={statusId}
-      onChange={(event) => handleStatusChange(event.target.value)}
+      onChange={(event) => handleStatusFilterChange(event.target.value)}
       className="h-10 min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-3 text-sm outline-none focus:border-blue-500">
       <option value="">Tất cả trạng thái đơn</option>
       {statuses.map((status) => (
@@ -306,16 +470,7 @@ export default function PosOrdersPage() {
      </select>
 
      {(search || paymentStatus || statusId) && (
-      <button
-       type="button"
-       onClick={() => {
-        setSearchInput("");
-        setSearch("");
-        setPaymentStatus("");
-        setStatusId("");
-        setPage(1);
-       }}
-       className="h-10 rounded-lg px-3 text-sm font-medium text-blue-600 hover:bg-blue-50">
+      <button type="button" onClick={handleClearFilters} className="h-10 rounded-lg px-3 text-sm font-medium text-blue-600 hover:bg-blue-50">
        Xóa bộ lọc
       </button>
      )}
@@ -353,81 +508,184 @@ export default function PosOrdersPage() {
        </tr>
       </thead>
 
-      <tbody className="divide-y divide-gray-100">
-       {loading && orders.length === 0 ? (
+      <tbody className="divide-y divide-gray-100 bg-white">
+       {orders.length === 0 ? (
         <tr>
-         <td colSpan={7} className="px-5 py-16 text-center text-gray-500">
-          <FaSyncAlt className="mx-auto mb-3 animate-spin text-lg" />
-          Đang tải đơn hàng...
-         </td>
-        </tr>
-       ) : orders.length === 0 ? (
-        <tr>
-         <td colSpan={7} className="px-5 py-16 text-center">
-          <FaShoppingBag className="mx-auto mb-3 text-3xl text-gray-300" />
-          <p className="font-medium text-gray-700">Không tìm thấy đơn hàng</p>
-          <p className="mt-1 text-sm text-gray-500">Thử thay đổi từ khóa hoặc bộ lọc.</p>
+         <td colSpan={19} className="px-6 py-12 text-center text-gray-500">
+          Không tìm thấy đơn hàng nào.
          </td>
         </tr>
        ) : (
         orders.map((order) => {
-         const status = getStatus(order.statusId);
-         const customerName = order.customerSnapshot?.name || order.customerId?.name || "Khách hàng";
+         const currentStatus =
+          typeof order.statusId === "object" && order.statusId !== null ? order.statusId : statuses.find((status) => status._id === order.statusId);
 
-         const customerPhone = order.customerSnapshot?.phone || order.customerId?.phone || "";
+         const currentSortOrder = currentStatus?.sortOrder ?? -1;
 
-         const paymentColor =
-          order.paymentStatus === "PAID"
-           ? "bg-green-50 text-green-700"
-           : order.paymentStatus === "FAILED"
-             ? "bg-red-50 text-red-700"
-             : order.paymentStatus === "REFUNDED"
-               ? "bg-purple-50 text-purple-700"
-               : "bg-amber-50 text-amber-700";
+         const availableStatuses = statuses.filter((status) => status.isActive !== false && (status.sortOrder ?? 0) > currentSortOrder);
+
+         const paymentOption = PAYMENT_STATUS_OPTIONS.find((option) => option.value === order.paymentStatus);
+
+         const customerName =
+          order.customerSnapshot?.name || (typeof order.customerId === "object" && order.customerId !== null ? order.customerId.name : "") || "Khách hàng";
+
+         const customerPhone =
+          order.customerSnapshot?.phone || (typeof order.customerId === "object" && order.customerId !== null ? order.customerId.phone : "") || "—";
+
+         const customerEmail = order.customerSnapshot?.email || "—";
+
+         const address = order.shippingAddress;
+
+         const fullAddress = [address?.address, address?.ward, address?.district, address?.province].filter(Boolean).join(", ");
+
+         const totalQuantity = (order.items ?? []).reduce((sum, item) => sum + (item.quantity || 0), 0);
 
          return (
-          <tr key={order._id} className="transition hover:bg-gray-50">
-           <td className="px-5 py-4">
-            <button type="button" onClick={() => goToDetail(order._id)} className="font-semibold text-blue-600 hover:text-blue-800 hover:underline">
-             {order.orderNumber}
-            </button>
+          <tr key={order._id} className="align-top transition-colors hover:bg-gray-50">
+           {/* 1. Mã đơn hàng */}
+           <td className="whitespace-nowrap px-4 py-4">
+            <div className="font-semibold text-gray-900">{order.orderNumber}</div>
+            <div className="mt-1 text-xs text-gray-400">ID: {order._id}</div>
            </td>
 
-           <td className="px-5 py-4">
-            <p className="max-w-[220px] truncate font-medium text-gray-900">{customerName}</p>
-            <p className="mt-1 text-xs text-gray-500">{customerPhone || "Không có số điện thoại"}</p>
+           {/* 2. Ngày tạo */}
+           <td className="whitespace-nowrap px-4 py-4 text-sm text-gray-600">{formatDateTime(order.createdAt)}</td>
+
+           {/* 3. Cập nhật lần cuối */}
+           <td className="whitespace-nowrap px-4 py-4 text-sm text-gray-600">{formatDateTime(order.updatedAt)}</td>
+
+           {/* 4. Khách hàng */}
+           <td className="px-4 py-4">
+            <div className="min-w-[160px]">
+             <p className="font-medium text-gray-900">{customerName}</p>
+             <p className="mt-1 text-sm text-gray-500">{customerPhone}</p>
+            </div>
            </td>
 
-           <td className="whitespace-nowrap px-5 py-4 text-gray-600">{formatDate(order.createdAt)}</td>
-
-           <td className="whitespace-nowrap px-5 py-4 text-right font-semibold text-gray-900">{formatMoney(order.total, order.currency)}</td>
-
-           <td className="px-5 py-4">
-            <span
-             className="inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium"
-             style={{
-              color: status.color,
-              backgroundColor: `${status.color}18`,
-             }}>
-             {status.name}
-            </span>
+           {/* 5. Email */}
+           <td className="px-4 py-4 text-sm text-gray-600">
+            <div className="min-w-[180px] break-words">{customerEmail}</div>
            </td>
 
-           <td className="px-5 py-4">
-            <span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium ${paymentColor}`}>
-             {getPaymentLabel(order.paymentStatus)}
-            </span>
-            <p className="mt-1 text-xs text-gray-500">{order.paymentMethod || "—"}</p>
+           {/* 6. Địa chỉ giao hàng */}
+           <td className="px-4 py-4 text-sm text-gray-600">
+            <div className="min-w-[220px] max-w-[300px]">
+             <p className="whitespace-normal">{fullAddress || "Chưa có địa chỉ"}</p>
+
+             {address?.postalCode && <p className="mt-1 text-xs text-gray-400">Mã bưu chính: {address.postalCode}</p>}
+            </div>
            </td>
 
-           <td className="px-5 py-4 text-center">
+           {/* 7. Sản phẩm */}
+           <td className="px-4 py-4">
+            <div className="min-w-[260px] space-y-3">
+             {(order.items ?? []).map((item) => (
+              <div key={item._id} className="border-b border-gray-100 pb-3 last:border-0 last:pb-0">
+               <p className="whitespace-normal font-medium text-gray-800">{item.productSnapshot?.name || "Sản phẩm"}</p>
+
+               <p className="mt-1 text-xs text-gray-500">SKU: {item.productSnapshot?.sku || "—"}</p>
+
+               <p className="mt-1 text-sm text-gray-600">Đơn giá: {formatMoney(item.price, item.currency || order.currency)}</p>
+
+               <p className="mt-1 text-sm font-medium text-gray-800">Thành tiền: {formatMoney(item.subtotal, item.currency || order.currency)}</p>
+              </div>
+             ))}
+
+             {(!order.items || order.items.length === 0) && <span className="text-sm text-gray-400">Không có dữ liệu sản phẩm</span>}
+            </div>
+           </td>
+
+           {/* 8. Tổng số lượng */}
+           <td className="whitespace-nowrap px-4 py-4 text-center text-sm font-medium text-gray-700">{totalQuantity}</td>
+
+           {/* 9. Tiền hàng */}
+           <td className="whitespace-nowrap px-4 py-4 text-sm text-gray-700">{formatMoney(order.subtotal, order.currency)}</td>
+
+           {/* 10. Phí vận chuyển */}
+           <td className="whitespace-nowrap px-4 py-4 text-sm text-gray-700">{formatMoney(order.shippingFee, order.currency)}</td>
+
+           {/* 11. Giảm giá */}
+           <td className="whitespace-nowrap px-4 py-4 text-sm text-gray-700">{formatMoney(order.discount, order.currency)}</td>
+
+           {/* 12. Tổng tiền */}
+           <td className="whitespace-nowrap px-4 py-4">
+            <span className="font-semibold text-gray-900">{formatMoney(order.total, order.currency)}</span>
+           </td>
+
+           {/* 13. Phương thức thanh toán */}
+           <td className="whitespace-nowrap px-4 py-4 text-sm text-gray-700">{order.paymentMethod || "—"}</td>
+
+           {/* 14. Trạng thái đơn hàng */}
+           <td className="px-4 py-4">
+            <div className="min-w-[170px]">
+             <select
+              value={currentStatus?._id || (typeof order.statusId === "string" ? order.statusId : "")}
+              disabled={updatingOrderId === order._id || availableStatuses.length === 0}
+              onChange={(event) => handleStatusChange(order, event.target.value)}
+              className="w-full rounded-lg border-0 px-3 py-2 text-sm font-medium outline-none ring-1 ring-inset ring-black/5 disabled:cursor-not-allowed disabled:opacity-60"
+              style={{
+               color: currentStatus?.color || "#374151",
+               backgroundColor: currentStatus?.color ? `${currentStatus.color}18` : "#f3f4f6",
+              }}>
+              {currentStatus && <option value={currentStatus._id}>{currentStatus.name}</option>}
+
+              {availableStatuses.map((status) => (
+               <option key={status._id} value={status._id}>
+                {status.name}
+               </option>
+              ))}
+             </select>
+
+             {updatingOrderId === order._id && <p className="mt-1 text-xs text-gray-500">Đang cập nhật...</p>}
+            </div>
+           </td>
+
+           {/* 15. Trạng thái thanh toán */}
+           <td className="px-4 py-4">
+            <div className="min-w-[180px]">
+             <select
+              value={order.paymentStatus || "PENDING"}
+              disabled={updatingPaymentOrderId === order._id}
+              onChange={(event) => handlePaymentStatusChange(order, event.target.value)}
+              className="w-full rounded-lg border-0 px-3 py-2 text-sm font-medium outline-none ring-1 ring-inset ring-black/5 disabled:cursor-wait disabled:opacity-60"
+              style={{
+               color: paymentOption?.color || "#374151",
+               backgroundColor: paymentOption?.background || "#f3f4f6",
+              }}>
+              {PAYMENT_STATUS_OPTIONS.map((option) => (
+               <option key={option.value} value={option.value}>
+                {option.label}
+               </option>
+              ))}
+             </select>
+
+             {updatingPaymentOrderId === order._id && <p className="mt-1 text-xs text-gray-500">Đang cập nhật...</p>}
+            </div>
+           </td>
+
+           {/* 16. Phương thức vận chuyển */}
+           <td className="px-4 py-4 text-sm text-gray-700">
+            <div className="min-w-[150px] whitespace-normal">{order.shippingMethod || "—"}</div>
+           </td>
+
+           {/* 17. Mã vận đơn */}
+           <td className="px-4 py-4 text-sm text-gray-700">
+            <div className="min-w-[130px] break-words">{order.trackingNumber || "—"}</div>
+           </td>
+
+           {/* 18. Ghi chú */}
+           <td className="px-4 py-4 text-sm text-gray-600">
+            <div className="min-w-[180px] max-w-[260px] whitespace-normal break-words">{order.note || "—"}</div>
+           </td>
+
+           {/* 19. Thao tác */}
+           <td className="whitespace-nowrap px-4 py-4">
             <button
              type="button"
-             onClick={() => goToDetail(order._id)}
-             title="Xem chi tiết đơn hàng"
-             aria-label={`Xem đơn ${order.orderNumber}`}
-             className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600">
-             <FaEye />
+             onClick={() => router.push(`/pos/orders/${order._id}`)}
+             className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-100">
+             <FaEdit size={16} />
+             Chi tiết
             </button>
            </td>
           </tr>

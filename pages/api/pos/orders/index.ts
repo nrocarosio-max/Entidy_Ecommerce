@@ -5,181 +5,246 @@ import { connectDB } from "~/lib/mongodb";
 import { requireAuth } from "~/lib/permissions";
 
 import { Order } from "~/models/Order";
-import { Customer } from "~/models/Customer";
+import { OrderItem } from "~/models/OrderItem";
 import { OrderStatus } from "~/models/OrderStatus";
 
-const ALLOWED_ROLES = ["SUPER_ADMIN", "STORE_ADMIN", "MARKETING", "SALES", "FULFILLMENT"];
+const ALLOWED_ROLES = ["SUPER_ADMIN", "STORE_ADMIN"];
 
-const PAYMENT_STATUSES = ["PENDING", "PAID", "FAILED", "REFUNDED"];
+const PAYMENT_METHODS = ["COD", "BANK_TRANSFER", "CREDIT_CARD", "DEBIT_CARD", "OTHER"];
 
-type ApiResponse = {
- success: boolean;
- message?: string;
- data?: unknown[];
- pagination?: {
-  page: number;
-  limit: number;
-  total: number;
-  totalPages: number;
- };
-};
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse<ApiResponse>) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
  if (req.method !== "GET") {
   res.setHeader("Allow", ["GET"]);
-
   return res.status(405).json({
-   success: false,
-   message: "Method not allowed.",
+   message: "Phương thức không được hỗ trợ.",
   });
  }
 
  try {
   await connectDB();
 
-  // Register referenced models before populate.
-  void Customer;
-  void OrderStatus;
-
   const user = await requireAuth(req);
-  const role = String(user.role).toUpperCase();
 
-  if (!ALLOWED_ROLES.includes(role)) {
+  if (!ALLOWED_ROLES.includes(user.role)) {
    return res.status(403).json({
-    success: false,
-    message: "You do not have permission to view orders.",
+    message: "Bạn không có quyền xem danh sách đơn hàng.",
    });
   }
 
-  const page = Math.max(1, Number.parseInt(String(req.query.page || "1"), 10) || 1);
+  const parseString = (value: unknown) => (typeof value === "string" ? value.trim() : "");
 
-  const limit = Math.min(100, Math.max(1, Number.parseInt(String(req.query.limit || "20"), 10) || 20));
+  const keyword = parseString(req.query.keyword);
+  const statusId = parseString(req.query.statusId);
+  const requestedStoreId = parseString(req.query.storeId);
+  const startDate = parseString(req.query.startDate);
+  const endDate = parseString(req.query.endDate);
+  const paymentMethod = parseString(req.query.paymentMethod);
+  const paymentStatus = parseString(req.query.paymentStatus);
 
-  const search = String(req.query.search || "").trim();
-  const statusId = req.query.statusId ? String(req.query.statusId) : "";
-  const paymentStatus = req.query.paymentStatus ? String(req.query.paymentStatus).toUpperCase() : "";
-  const requestedStoreId = req.query.storeId ? String(req.query.storeId) : "";
+  const PAYMENT_STATUSES = ["PENDING", "PAID", "FAILED", "REFUNDED"];
 
-  const filter: Record<string, any> = {
-   isDeleted: { $ne: true },
+  if (paymentStatus && !PAYMENT_STATUSES.includes(paymentStatus)) {
+   return res.status(400).json({
+    message: "Trạng thái thanh toán không hợp lệ.",
+   });
+  }
+  const sortBy = parseString(req.query.sortBy) || "newest";
+
+  const rawPage = Number(req.query.page || 1);
+  const rawLimit = Number(req.query.limit || 20);
+
+  const page = Number.isInteger(rawPage) && rawPage > 0 ? rawPage : 1;
+
+  const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 20;
+
+  if (statusId && !mongoose.Types.ObjectId.isValid(statusId)) {
+   return res.status(400).json({
+    message: "ID trạng thái không hợp lệ.",
+   });
+  }
+
+  if (requestedStoreId && !mongoose.Types.ObjectId.isValid(requestedStoreId)) {
+   return res.status(400).json({
+    message: "ID cửa hàng không hợp lệ.",
+   });
+  }
+
+  if (paymentMethod && !PAYMENT_METHODS.includes(paymentMethod)) {
+   return res.status(400).json({
+    message: "Phương thức thanh toán không hợp lệ.",
+   });
+  }
+
+  const allowedSorts: Record<string, Record<string, 1 | -1>> = {
+   newest: { createdAt: -1 },
+   oldest: { createdAt: 1 },
+   amount_desc: { total: -1, createdAt: -1 },
+   amount_asc: { total: 1, createdAt: -1 },
   };
 
-  // Store-level access control.
-  if (role === "SUPER_ADMIN") {
-   if (requestedStoreId) {
-    if (!mongoose.Types.ObjectId.isValid(requestedStoreId)) {
-     return res.status(400).json({
-      success: false,
-      message: "Invalid storeId.",
-     });
-    }
+  if (!allowedSorts[sortBy]) {
+   return res.status(400).json({
+    message: "Kiểu sắp xếp không hợp lệ.",
+   });
+  }
 
-    filter.storeId = new mongoose.Types.ObjectId(requestedStoreId);
-   }
-  } else {
+  const filter: Record<string, any> = {
+   isDeleted: false,
+  };
+
+  // STORE_ADMIN chỉ được truy cập cửa hàng của mình.
+  if (user.role !== "SUPER_ADMIN") {
    if (!user.storeId) {
     return res.status(403).json({
-     success: false,
-     message: "Your account is not assigned to a store.",
+     message: "Tài khoản chưa được gán cửa hàng.",
     });
    }
 
    filter.storeId = new mongoose.Types.ObjectId(user.storeId);
+  } else if (requestedStoreId) {
+   // SUPER_ADMIN có thể lọc theo một cửa hàng cụ thể.
+   filter.storeId = new mongoose.Types.ObjectId(requestedStoreId);
   }
 
-  // Search order number, customer name, or phone.
-  if (search) {
-   const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-   const matchingCustomers = await Customer.find({
-    storeId: filter.storeId,
-    isActive: true,
-    $or: [{ name: { $regex: escapedSearch, $options: "i" } }, { phone: { $regex: escapedSearch, $options: "i" } }],
-   })
-    .select("_id")
-    .limit(500)
-    .lean();
-
-   const customerIds = matchingCustomers.map((customer) => customer._id);
-
-   filter.$or = [
-    { orderNumber: { $regex: escapedSearch, $options: "i" } },
-    { "customerSnapshot.name": { $regex: escapedSearch, $options: "i" } },
-    { "customerSnapshot.phone": { $regex: escapedSearch, $options: "i" } },
-    ...(customerIds.length > 0 ? [{ customerId: { $in: customerIds } }] : []),
-   ];
-  }
-
-  // Filter by workflow status.
   if (statusId) {
-   if (!mongoose.Types.ObjectId.isValid(statusId)) {
-    return res.status(400).json({
-     success: false,
-     message: "Invalid statusId.",
-    });
-   }
-
    filter.statusId = new mongoose.Types.ObjectId(statusId);
   }
 
-  // Filter by payment status.
+  if (paymentMethod) {
+   filter.paymentMethod = paymentMethod;
+  }
   if (paymentStatus) {
-   if (!PAYMENT_STATUSES.includes(paymentStatus)) {
+   filter.paymentStatus = paymentStatus;
+  }
+  if (startDate || endDate) {
+   const createdAt: Record<string, Date> = {};
+
+   if (startDate) {
+    const date = new Date(`${startDate}T00:00:00.000Z`);
+
+    if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== startDate) {
+     return res.status(400).json({
+      message: "Ngày bắt đầu không hợp lệ.",
+     });
+    }
+
+    createdAt.$gte = date;
+   }
+
+   if (endDate) {
+    const date = new Date(`${endDate}T00:00:00.000Z`);
+
+    if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== endDate) {
+     return res.status(400).json({
+      message: "Ngày kết thúc không hợp lệ.",
+     });
+    }
+
+    // Bao gồm toàn bộ ngày kết thúc.
+    date.setUTCDate(date.getUTCDate() + 1);
+    createdAt.$lt = date;
+   }
+
+   if (createdAt.$gte && createdAt.$lt && createdAt.$gte >= createdAt.$lt) {
     return res.status(400).json({
-     success: false,
-     message: "Invalid paymentStatus.",
+     message: "Khoảng ngày không hợp lệ.",
     });
    }
 
-   filter.paymentStatus = paymentStatus;
+   filter.createdAt = createdAt;
+  }
+
+  if (keyword) {
+   const escapedKeyword = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+   const regex = new RegExp(escapedKeyword, "i");
+
+   filter.$or = [{ orderNumber: regex }, { "customerSnapshot.name": regex }, { "customerSnapshot.phone": regex }];
   }
 
   const skip = (page - 1) * limit;
 
-  const [orders, total] = await Promise.all([
-   Order.find(filter)
-    .populate("customerId", "name phone nameNormalized")
-    .populate("statusId", "name code color sortOrder")
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(limit)
-    .lean(),
+  const [orderDocuments, total] = await Promise.all([
+   Order.find(filter).sort(allowedSorts[sortBy]).skip(skip).limit(limit).lean(),
 
    Order.countDocuments(filter),
   ]);
 
-  return res.status(200).json({
-   success: true,
-   data: orders,
-   pagination: {
-    page,
-    limit,
-    total,
-    totalPages: Math.ceil(total / limit),
-   },
-  });
- } catch (error: unknown) {
-  console.error("POS orders API error:", error);
+  const orderIds = orderDocuments.map((order: any) => order._id);
 
+  const [itemDocuments, statusDocuments] = await Promise.all([
+   orderIds.length
+    ? OrderItem.find({
+       orderId: { $in: orderIds },
+      })
+       .sort({ createdAt: 1, _id: 1 })
+       .lean()
+    : Promise.resolve([]),
+
+   OrderStatus.find({}).select("_id name code color icon sortOrder isActive isFinal nextStatusIds").sort({ sortOrder: 1 }).lean(),
+  ]);
+
+  const itemsByOrder = new Map<string, any[]>();
+
+  for (const item of itemDocuments as any[]) {
+   const key = String(item.orderId);
+
+   const currentItems = itemsByOrder.get(key) || [];
+
+   currentItems.push({
+    _id: String(item._id),
+    productId: String(item.productId),
+    productSnapshot: item.productSnapshot,
+    quantity: item.quantity,
+    price: item.price,
+    subtotal: item.subtotal,
+    currency: item.currency,
+   });
+
+   itemsByOrder.set(key, currentItems);
+  }
+
+  const orders = orderDocuments.map((order: any) => ({
+   ...order,
+   _id: String(order._id),
+   storeId: String(order.storeId),
+   customerId: String(order.customerId),
+   statusId: String(order.statusId),
+   items: itemsByOrder.get(String(order._id)) || [],
+  }));
+
+  const statuses = (statusDocuments as any[]).map((status) => ({
+   ...status,
+   _id: String(status._id),
+   nextStatusIds: (status.nextStatusIds || []).map((id: mongoose.Types.ObjectId) => String(id)),
+  }));
+
+  return res.status(200).json({
+   orders,
+   statuses,
+   total,
+   page,
+   limit,
+   totalPages: Math.ceil(total / limit),
+  });
+ } catch (error) {
   const message = error instanceof Error ? error.message : "";
 
   if (message === "UNAUTHORIZED") {
    return res.status(401).json({
-    success: false,
-    message: "Please sign in to continue.",
+    message: "Vui lòng đăng nhập để tiếp tục.",
    });
   }
 
   if (message === "FORBIDDEN") {
    return res.status(403).json({
-    success: false,
-    message: "You do not have permission to view these orders.",
+    message: "Bạn không có quyền thực hiện thao tác này.",
    });
   }
 
+  console.error("POS ORDERS API ERROR:", error);
+
   return res.status(500).json({
-   success: false,
-   message: process.env.NODE_ENV === "development" ? message || "Internal server error." : "Internal server error.",
+   message: "Không thể tải danh sách đơn hàng.",
   });
  }
 }

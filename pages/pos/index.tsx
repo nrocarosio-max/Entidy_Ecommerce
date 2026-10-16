@@ -4,8 +4,6 @@ import type { NextPage } from "next";
 import Link from "next/link";
 import { FaBox, FaBoxes, FaChartLine, FaClipboardList, FaExclamationTriangle, FaRedo, FaShoppingCart, FaUsers } from "react-icons/fa";
 
-import PosLayout from "~/components/pos/PosLayout";
-
 interface RevenueItem {
  currency: string;
  total: number;
