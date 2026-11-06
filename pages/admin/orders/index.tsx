@@ -1336,20 +1336,30 @@ export default function OrdersPage() {
      ) : (
       <>
        <div className="w-full overflow-x-auto">
-        <table className="w-max min-w-[2800px] table-fixed text-left text-sm">
-         <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+        <table className="w-full table-fixed border-collapse text-xs">
+         <thead className="bg-gray-50 text-gray-600">
           <tr>
-           <th className="w-[180px] px-5 py-4 font-semibold">Order</th>
-           <th className="w-[230px] px-5 py-4 font-semibold">Customer</th>
-           <th className="w-[250px] px-5 py-4 font-semibold">Products</th>
-           <th className="w-[200px] px-5 py-4 font-semibold">Affiliate</th>
-           <th className="w-[200px] px-5 py-4 font-semibold">Affiliate store</th>
-           <th className="w-[200px] px-5 py-4 font-semibold">Commission</th>
-           <th className="w-[180px] px-5 py-4 font-semibold">Date</th>
-           <th className="w-[180px] px-5 py-4 font-semibold">Total</th>
-           <th className="w-[220px] px-5 py-4 font-semibold">Payment</th>
-           <th className="w-[240px] px-5 py-4 font-semibold">Order status</th>
-           <th className="w-[300px] px-5 py-4 text-right font-semibold">Actions</th>
+           <th className="w-[110px] whitespace-nowrap px-2 py-3 text-left font-semibold">Order</th>
+
+           <th className="w-[150px] whitespace-nowrap px-2 py-3 text-left font-semibold">Customer</th>
+
+           <th className="w-[170px] px-2 py-3 text-left font-semibold">Products</th>
+
+           <th className="w-[130px] px-2 py-3 text-left font-semibold">Affiliate</th>
+
+           <th className="w-[130px] px-2 py-3 text-left font-semibold">Affiliate store</th>
+
+           <th className="w-[120px] whitespace-nowrap px-2 py-3 text-left font-semibold">Commission</th>
+
+           <th className="w-[125px] whitespace-nowrap px-2 py-3 text-left font-semibold">Date</th>
+
+           <th className="w-[110px] whitespace-nowrap px-2 py-3 text-left font-semibold">Total</th>
+
+           <th className="w-[140px] px-2 py-3 text-left font-semibold">Payment</th>
+
+           <th className="w-[150px] px-2 py-3 text-left font-semibold">Order status</th>
+
+           <th className="w-[180px] whitespace-nowrap px-2 py-3 text-right font-semibold">Actions</th>
           </tr>
          </thead>
 
