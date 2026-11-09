@@ -58,74 +58,7 @@ export default function Home() {
 
  return (
   <>
-   <Head>
-    <title>BeautyStore | Chăm sóc và làm đẹp mỗi ngày</title>
-    <meta name="description" content="Khám phá đai định hình mặt thoáng khí hỗ trợ nâng đỡ khuôn mặt. Thiết kế tiện lợi, co giãn và có thể tái sử dụng." />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-   </Head>
-
    <div className="min-h-screen overflow-hidden bg-[#fffdfc] text-[#513b40]">
-    {/* HEADER */}
-    <header className="sticky top-0 z-50 border-b border-[#f4e8e9] bg-white/95 backdrop-blur-md">
-     <div className="mx-auto flex h-[72px] max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-      <Link href="/" className="shrink-0">
-       <span className="font-serif text-2xl font-bold tracking-wide text-[#d65376] sm:text-3xl">BeautyStore</span>
-      </Link>
-
-      <nav className="hidden items-center gap-9 md:flex">
-       <Link href="#trang-chu" className="text-sm font-medium text-[#513b40] transition hover:text-[#d65376]">
-        Trang chủ
-       </Link>
-       <Link href="#san-pham" className="text-sm font-medium text-[#513b40] transition hover:text-[#d65376]">
-        Sản phẩm
-       </Link>
-       <Link href="#loi-ich" className="text-sm font-medium text-[#513b40] transition hover:text-[#d65376]">
-        Lợi ích
-       </Link>
-       <Link href="#huong-dan" className="text-sm font-medium text-[#513b40] transition hover:text-[#d65376]">
-        Hướng dẫn sử dụng
-       </Link>
-       <Link href="#lien-he" className="text-sm font-medium text-[#513b40] transition hover:text-[#d65376]">
-        Liên hệ
-       </Link>
-      </nav>
-
-      <div className="hidden items-center gap-3 md:flex">
-       <Link
-        href="#san-pham"
-        className="flex items-center gap-2 rounded-full bg-[#d65376] px-6 py-3 text-sm font-semibold text-white transition hover:bg-[#bd4264]">
-        <FiShoppingBag size={16} />
-        Khám phá ngay
-       </Link>
-      </div>
-
-      <button
-       onClick={() => setMenuOpen(!menuOpen)}
-       className="flex h-10 w-10 items-center justify-center rounded-full bg-[#fcf2f3] text-[#d65376] md:hidden"
-       aria-label="Mở menu">
-       {menuOpen ? <FiX size={22} /> : <FiMenu size={22} />}
-      </button>
-     </div>
-
-     {menuOpen && (
-      <div className="border-t border-[#f4e8e9] bg-white px-5 py-5 md:hidden">
-       <nav className="flex flex-col gap-5">
-        {[
-         ["Trang chủ", "#trang-chu"],
-         ["Sản phẩm", "#san-pham"],
-         ["Lợi ích", "#loi-ich"],
-         ["Hướng dẫn sử dụng", "#huong-dan"],
-         ["Liên hệ", "#lien-he"],
-        ].map(([label, href]) => (
-         <Link key={href} href={href} onClick={() => setMenuOpen(false)} className="text-sm font-medium text-[#513b40]">
-          {label}
-         </Link>
-        ))}
-       </nav>
-      </div>
-     )}
-    </header>
-
     <main>
      {/* HERO */}
      <section id="trang-chu" className="relative overflow-hidden bg-[#fcf4f3]">
@@ -430,49 +363,8 @@ export default function Home() {
       </div>
      </section>
     </main>
-
-    {/* FOOTER */}
-    <footer id="lien-he" className="border-t border-[#f0e2e5] bg-[#fcf7f6]">
-     <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
-      <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-3">
-       <div>
-        <Link href="/">
-         <span className="font-serif text-3xl font-bold text-[#d65376]">BeautyStore</span>
-        </Link>
-        <p className="mt-5 max-w-sm text-sm leading-7 text-[#90777e]">
-         Đồng hành cùng phụ nữ trên hành trình chăm sóc bản thân, nuôi dưỡng vẻ đẹp và sự tự tin mỗi ngày.
-        </p>
-       </div>
-
-       <div>
-        <h3 className="font-serif text-lg font-semibold text-[#513b40]">Hỗ trợ khách hàng</h3>
-        <div className="mt-5 flex flex-col gap-4 text-sm text-[#90777e]">
-         <Link href="#san-pham" className="hover:text-[#d65376]">
-          Thông tin sản phẩm
-         </Link>
-         <Link href="#huong-dan" className="hover:text-[#d65376]">
-          Hướng dẫn sử dụng
-         </Link>
-         <Link href="#dat-hang" className="hover:text-[#d65376]">
-          Hướng dẫn đặt hàng
-         </Link>
-        </div>
-       </div>
-
-       <div>
-        <h3 className="font-serif text-lg font-semibold text-[#513b40]">Liên hệ với chúng tôi</h3>
-        <p className="mt-5 text-sm leading-7 text-[#90777e]">Chúng tôi luôn sẵn sàng hỗ trợ và giải đáp thắc mắc của bạn.</p>
-        <p className="mt-3 text-sm text-[#d65376]">Hotline: Cập nhật số điện thoại</p>
-       </div>
-      </div>
-
-      <div className="mt-12 border-t border-[#efdee1] pt-7 text-center">
-       <p className="text-xs text-[#a18c91]">© {new Date().getFullYear()} BeautyStore. Đã đăng ký bản quyền.</p>
-       <p className="mt-2 text-xs text-[#a18c91]">Đồng hành cùng vẻ đẹp và sự tự tin của phụ nữ Việt Nam.</p>
-      </div>
-     </div>
-    </footer>
    </div>
   </>
  );
 }
+Home.Layout = "Default";
