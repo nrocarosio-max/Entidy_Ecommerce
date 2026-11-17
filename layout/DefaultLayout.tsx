@@ -7,8 +7,8 @@ const DefaultLayout = ({ children }: PropsWithChildren) => {
  return (
   <>
    <Head>
-    <link rel="icon" type="image/webp" href="/greenora.webp" />
-    <title>GREENORA | Chăm sóc – Phong cách sống</title>
+    <link rel="icon" type="image/webp" href="/ngocmoc.webp" />
+    <title>Ngọc Mộc | Chăm sóc – Phong cách sống</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"></meta>
     <meta property="og:title" content="Làm đẹp – Chăm sóc – Phong cách sống" key="title" />
     <meta name="keywords" content="Làm đẹp – Chăm sóc – Phong cách sống"></meta>
