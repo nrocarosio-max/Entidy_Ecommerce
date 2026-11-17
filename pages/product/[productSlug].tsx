@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import axios from "axios";
 
@@ -133,11 +133,17 @@ export default function ProductDetailPage() {
 
  const [showSuccessPopup, setShowSuccessPopup] = useState(false);
  const [successOrderNumber, setSuccessOrderNumber] = useState("");
-
+ const [showOrderPopup, setShowOrderPopup] = useState(false);
  const [isFavorite, setIsFavorite] = useState(false);
  const [searchQuery, setSearchQuery] = useState("");
  const [showMobileMenu, setShowMobileMenu] = useState(false);
+ useEffect(() => {
+  document.body.style.overflow = showOrderPopup || showSuccessPopup ? "hidden" : "";
 
+  return () => {
+   document.body.style.overflow = "";
+  };
+ }, [showOrderPopup, showSuccessPopup]);
  const thumbnailRef = useRef<HTMLDivElement>(null);
 
  const availableTabs = [
@@ -162,10 +168,8 @@ export default function ProductDetailPage() {
  const totalPrice = (product?.price ?? 0) * quantity;
 
  const scrollToOrder = () => {
-  document.getElementById("order-form")?.scrollIntoView({
-   behavior: "smooth",
-   block: "start",
-  });
+  setSubmitMessage("");
+  setShowOrderPopup(true);
  };
 
  const handleQuantity = (type: "increase" | "decrease") => {
@@ -265,6 +269,7 @@ export default function ProductDetailPage() {
    const orderNumber = response.data.order?.orderNumber || "";
 
    setSuccessOrderNumber(orderNumber);
+   setShowOrderPopup(false);
    setShowSuccessPopup(true);
 
    setCustomerName("");
@@ -850,184 +855,226 @@ export default function ProductDetailPage() {
 
     {/* ORDER FORM */}
 
-    <section id="order-form" className="scroll-mt-6 mt-4 bg-white p-5 shadow-sm sm:p-7">
-     <div className="mb-7 border-b border-gray-100 pb-5">
-      <h2 className="text-lg font-medium uppercase text-[#333]">Đặt hàng</h2>
+    {/* ORDER FORM POPUP */}
 
-      <p className="mt-2 text-sm text-gray-500">Điền thông tin nhận hàng để hoàn tất đơn hàng của bạn.</p>
-     </div>
+    {showOrderPopup && (
+     <div
+      className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/60 px-3 py-4 sm:px-5"
+      onClick={(event) => {
+       if (event.target === event.currentTarget && !isSubmitting) {
+        setShowOrderPopup(false);
+       }
+      }}>
+      <div className="relative flex max-h-[92vh] w-full max-w-xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl">
+       {/* POPUP HEADER */}
 
-     {/* SELECTED PRODUCT */}
-
-     <div className="flex gap-4 border-b border-gray-100 pb-5">
-      <div className="h-24 w-24 shrink-0 overflow-hidden bg-gray-50">
-       {images[0] && <img src={images[0]} alt={product.name} loading="lazy" className="h-full w-full object-cover" />}
-      </div>
-
-      <div className="min-w-0 flex-1">
-       <h3 className="line-clamp-2 text-sm font-medium">{product.name}</h3>
-
-       <p className="mt-2 text-lg font-medium text-[#EE4D2D]">{formatPrice(product.price)}</p>
-
-       <p className="mt-1 text-xs text-gray-400">Số lượng: {quantity}</p>
-      </div>
-     </div>
-
-     <form onSubmit={handleSubmitOrder} className="mt-6 space-y-5">
-      <div>
-       <label className="mb-2 block text-sm font-medium">
-        Họ và tên <span className="text-red-500">*</span>
-       </label>
-
-       <input
-        type="text"
-        required
-        autoComplete="name"
-        value={customerName}
-        onChange={(event) => setCustomerName(event.target.value)}
-        placeholder="Nhập họ và tên của bạn"
-        className="h-11 w-full rounded-sm border border-gray-300 px-4 text-sm outline-none transition focus:border-[#EE4D2D]"
-       />
-      </div>
-
-      <div>
-       <label className="mb-2 block text-sm font-medium">
-        Số điện thoại <span className="text-red-500">*</span>
-       </label>
-
-       <input
-        type="tel"
-        required
-        autoComplete="tel"
-        value={phone}
-        onChange={(event) => setPhone(event.target.value)}
-        placeholder="Nhập số điện thoại nhận hàng"
-        className="h-11 w-full rounded-sm border border-gray-300 px-4 text-sm outline-none transition focus:border-[#EE4D2D]"
-       />
-      </div>
-
-      <div>
-       <label className="mb-2 block text-sm font-medium">
-        Tỉnh/Thành phố <span className="text-red-500">*</span>
-       </label>
-
-       <div className="relative">
-        <select
-         required
-         name="province"
-         value={province}
-         onChange={(event) => setProvince(event.target.value)}
-         className="h-11 w-full appearance-none rounded-sm border border-gray-300 bg-white px-4 pr-10 text-sm outline-none transition focus:border-[#EE4D2D]">
-         <option value="" disabled>
-          Chọn tỉnh/thành phố
-         </option>
-
-         {provinces.map(([id, name]) => (
-          <option key={id} value={`${id}:${name}`}>
-           {name}
-          </option>
-         ))}
-        </select>
-
-        <FiChevronDown className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-gray-400" />
-       </div>
-      </div>
-
-      <div>
-       <label className="mb-2 block text-sm font-medium">
-        Địa chỉ nhận hàng <span className="text-red-500">*</span>
-       </label>
-
-       <textarea
-        required
-        autoComplete="street-address"
-        value={address}
-        onChange={(event) => setAddress(event.target.value)}
-        placeholder="Số nhà, tên đường, phường/xã..."
-        rows={3}
-        className="w-full resize-none rounded-sm border border-gray-300 p-4 text-sm outline-none transition focus:border-[#EE4D2D]"
-       />
-      </div>
-
-      <div>
-       <label className="mb-2 block text-sm font-medium">
-        Ghi chú <span className="font-normal text-gray-400">(Không bắt buộc)</span>
-       </label>
-
-       <textarea
-        value={note}
-        onChange={(event) => setNote(event.target.value)}
-        placeholder="Ghi chú thêm cho người bán..."
-        rows={2}
-        className="w-full resize-none rounded-sm border border-gray-300 p-4 text-sm outline-none transition focus:border-[#EE4D2D]"
-       />
-      </div>
-
-      {/* ORDER SUMMARY */}
-
-      <div className="border border-gray-200 p-5">
-       <h3 className="mb-5 text-sm font-medium">Chi tiết đơn hàng</h3>
-
-       <div className="flex items-center justify-between text-sm">
-        <span className="text-gray-500">Đơn giá</span>
-
-        <span>{formatPrice(product.price)}</span>
-       </div>
-
-       <div className="mt-5 flex items-center justify-between text-sm">
-        <span className="text-gray-500">Số lượng</span>
-
-        <div className="flex h-8 items-center border border-gray-300">
-         <button
-          type="button"
-          onClick={() => handleQuantity("decrease")}
-          disabled={quantity <= 1}
-          className="flex h-full w-8 items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-30">
-          <FiMinus size={12} />
-         </button>
-
-         <span className="min-w-10 text-center">{quantity}</span>
-
-         <button
-          type="button"
-          onClick={() => handleQuantity("increase")}
-          disabled={quantity >= 99}
-          className="flex h-full w-8 items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-30">
-          <FiPlus size={12} />
-         </button>
+       <div className="flex shrink-0 items-center justify-between border-b border-gray-100 px-5 py-4 sm:px-7">
+        <div>
+         <h2 className="text-lg font-semibold text-[#333]">ĐẶT HÀNG</h2>
+         <p className="mt-1 text-xs text-gray-500">Vui lòng điền thông tin nhận hàng</p>
         </div>
+
+        <button
+         type="button"
+         onClick={() => setShowOrderPopup(false)}
+         disabled={isSubmitting}
+         className="flex h-9 w-9 items-center justify-center rounded-full text-gray-400 transition hover:bg-gray-100 hover:text-gray-700 disabled:opacity-40"
+         aria-label="Đóng popup">
+         <FiX size={22} />
+        </button>
        </div>
 
-       <div className="mt-5 flex items-center justify-between border-t border-gray-100 pt-5">
-        <span className="text-sm font-medium">Tổng thanh toán</span>
+       {/* POPUP CONTENT */}
 
-        <span className="text-2xl font-medium text-[#EE4D2D]">{formatPrice(totalPrice)}</span>
+       <div className="overflow-y-auto px-5 py-5 sm:px-7">
+        {/* SELECTED PRODUCT */}
+
+        <div className="flex gap-4 border-b border-gray-100 pb-5">
+         <div className="h-20 w-20 shrink-0 overflow-hidden rounded bg-gray-50">
+          {images[0] && <img src={images[0]} alt={product.name} className="h-full w-full object-cover" />}
+         </div>
+
+         <div className="min-w-0 flex-1">
+          <h3 className="line-clamp-2 text-sm font-medium text-gray-800">{product.name}</h3>
+
+          <p className="mt-2 text-lg font-semibold text-[#EE4D2D]">{formatPrice(product.price)}</p>
+
+          <p className="mt-1 text-xs text-gray-400">Số lượng: {quantity}</p>
+         </div>
+        </div>
+
+        {/* ORDER FORM */}
+
+        <form onSubmit={handleSubmitOrder} className="mt-5 space-y-4">
+         {/* NAME */}
+
+         <div>
+          <label className="mb-2 block text-sm font-medium text-gray-700">
+           Họ và tên <span className="text-red-500">*</span>
+          </label>
+
+          <input
+           type="text"
+           required
+           autoComplete="name"
+           value={customerName}
+           onChange={(event) => setCustomerName(event.target.value)}
+           placeholder="Nhập họ và tên của bạn"
+           className="h-11 w-full rounded-md border border-gray-200 px-4 text-sm outline-none transition focus:border-[#EE4D2D]"
+          />
+         </div>
+
+         {/* PHONE */}
+
+         <div>
+          <label className="mb-2 block text-sm font-medium text-gray-700">
+           Số điện thoại <span className="text-red-500">*</span>
+          </label>
+
+          <input
+           type="tel"
+           required
+           autoComplete="tel"
+           value={phone}
+           onChange={(event) => setPhone(event.target.value)}
+           placeholder="Nhập số điện thoại nhận hàng"
+           className="h-11 w-full rounded-md border border-gray-200 px-4 text-sm outline-none transition focus:border-[#EE4D2D]"
+          />
+         </div>
+
+         {/* PROVINCE */}
+
+         <div>
+          <label className="mb-2 block text-sm font-medium text-gray-700">
+           Tỉnh/Thành phố <span className="text-red-500">*</span>
+          </label>
+
+          <div className="relative">
+           <select
+            required
+            name="province"
+            value={province}
+            onChange={(event) => setProvince(event.target.value)}
+            className="h-11 w-full appearance-none rounded-md border border-gray-200 bg-white px-4 pr-10 text-sm outline-none transition focus:border-[#EE4D2D]">
+            <option value="" disabled>
+             Chọn tỉnh/thành phố
+            </option>
+
+            {provinces.map(([id, name]) => (
+             <option key={id} value={`${id}:${name}`}>
+              {name}
+             </option>
+            ))}
+           </select>
+
+           <FiChevronDown className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-gray-400" />
+          </div>
+         </div>
+
+         {/* ADDRESS */}
+
+         <div>
+          <label className="mb-2 block text-sm font-medium text-gray-700">
+           Địa chỉ nhận hàng <span className="text-red-500">*</span>
+          </label>
+
+          <textarea
+           required
+           autoComplete="street-address"
+           value={address}
+           onChange={(event) => setAddress(event.target.value)}
+           placeholder="Số nhà, tên đường, phường/xã..."
+           rows={2}
+           className="w-full resize-none rounded-md border border-gray-200 p-3 text-sm outline-none transition focus:border-[#EE4D2D]"
+          />
+         </div>
+
+         {/* NOTE */}
+
+         <div>
+          <label className="mb-2 block text-sm font-medium text-gray-700">
+           Ghi chú
+           <span className="ml-1 font-normal text-gray-400">(Không bắt buộc)</span>
+          </label>
+
+          <textarea
+           value={note}
+           onChange={(event) => setNote(event.target.value)}
+           placeholder="Ghi chú thêm cho người bán..."
+           rows={2}
+           className="w-full resize-none rounded-md border border-gray-200 p-3 text-sm outline-none transition focus:border-[#EE4D2D]"
+          />
+         </div>
+
+         {/* ORDER SUMMARY */}
+
+         <div className="rounded-md bg-[#FFF5F1] p-4">
+          <div className="flex items-center justify-between text-sm">
+           <span className="text-gray-600">Đơn giá</span>
+           <span>{formatPrice(product.price)}</span>
+          </div>
+
+          <div className="mt-4 flex items-center justify-between text-sm">
+           <span className="text-gray-600">Số lượng</span>
+
+           <div className="flex h-8 items-center rounded border border-gray-200 bg-white">
+            <button
+             type="button"
+             onClick={() => handleQuantity("decrease")}
+             disabled={quantity <= 1}
+             className="flex h-full w-8 items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-30">
+             <FiMinus size={12} />
+            </button>
+
+            <span className="min-w-10 text-center text-sm">{quantity}</span>
+
+            <button
+             type="button"
+             onClick={() => handleQuantity("increase")}
+             disabled={quantity >= 99}
+             className="flex h-full w-8 items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-30">
+             <FiPlus size={12} />
+            </button>
+           </div>
+          </div>
+
+          <div className="mt-4 flex items-center justify-between border-t border-[#f2d9d0] pt-4">
+           <span className="text-sm font-semibold">Tổng thanh toán</span>
+
+           <span className="text-xl font-bold text-[#EE4D2D]">{formatPrice(totalPrice)}</span>
+          </div>
+
+          <p className="mt-2 text-[11px] text-gray-500">Phí vận chuyển sẽ được xác nhận theo địa chỉ nhận hàng.</p>
+         </div>
+
+         {/* ERROR MESSAGE */}
+
+         {submitMessage && (
+          <div role="alert" className="rounded-md bg-red-50 p-3 text-sm text-red-600">
+           {submitMessage}
+          </div>
+         )}
+
+         {/* SUBMIT */}
+
+         <button
+          type="submit"
+          disabled={isSubmitting}
+          className="flex h-12 w-full items-center justify-center gap-2 rounded-md bg-[#EE4D2D] text-sm font-semibold text-white transition hover:bg-[#d83e20] disabled:cursor-not-allowed disabled:opacity-60">
+          <FiShoppingCart size={18} />
+
+          {isSubmitting ? "ĐANG GỬI ĐƠN HÀNG..." : "ĐẶT HÀNG NGAY"}
+         </button>
+
+         <div className="flex items-center justify-center gap-2 pb-1 text-xs text-gray-400">
+          <FiShield className="text-[#EE4D2D]" />
+          Thông tin của bạn được bảo mật.
+         </div>
+        </form>
        </div>
-
-       <p className="mt-3 text-xs text-gray-400">Phí vận chuyển sẽ được xác nhận theo địa chỉ nhận hàng.</p>
       </div>
-
-      {submitMessage && (
-       <div role="status" className="bg-[#FFF1EC] p-4 text-sm text-[#EE4D2D]">
-        {submitMessage}
-       </div>
-      )}
-
-      <button
-       type="submit"
-       disabled={isSubmitting}
-       className="flex h-12 w-full items-center justify-center gap-2 rounded-sm bg-[#EE4D2D] text-sm font-medium text-white transition hover:bg-[#d83e20] disabled:cursor-not-allowed disabled:opacity-60">
-       <FiShoppingCart size={18} />
-
-       {isSubmitting ? "ĐANG GỬI ĐƠN HÀNG..." : "ĐẶT HÀNG NGAY"}
-      </button>
-
-      <div className="flex items-center justify-center gap-2 text-xs text-gray-400">
-       <FiShield className="text-[#EE4D2D]" />
-       Thông tin của bạn được bảo mật.
-      </div>
-     </form>
-    </section>
+     </div>
+    )}
    </main>
 
    {/* MOBILE STICKY PURCHASE BAR */}
