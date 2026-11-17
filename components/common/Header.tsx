@@ -128,7 +128,7 @@ const Header = () => {
 
      {/* Menu Logo */}
      <Link href="/" className="mt-12 flex justify-center">
-      <img className="h-[46px]" src="/logo/ngocmoc.png" alt="NGỌC MỘC" />
+      <img className="h-[46px]" src="/ngocmoc.webp" alt="NGỌC MỘC" />
      </Link>
     </nav>
    </div>
