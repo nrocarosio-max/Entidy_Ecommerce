@@ -293,7 +293,7 @@ export const productData: ProductDetail[] = [
    },
   ],
 
-  origin: "Cần xác nhận theo thông tin trên bao bì",
+  origin: "Việt Nam",
 
   shippingText: "Hỗ trợ giao hàng toàn quốc",
 
