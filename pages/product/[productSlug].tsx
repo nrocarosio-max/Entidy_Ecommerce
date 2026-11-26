@@ -617,11 +617,11 @@ export default function ProductDetailPage() {
      <div className="flex flex-wrap items-center justify-between gap-5">
       <div className="flex min-w-0 items-center gap-4">
        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full border border-[#EE4D2D] bg-[#FFF5F1]">
-        <FiShoppingBag size={25} className="text-[#EE4D2D]" />
+        <img className="h-[68px] " src="/ngocmoc.webp" alt="NGỌC MỘC" />
        </div>
 
        <div className="min-w-0">
-        <h3 className="font-medium text-[#333]">Cửa hàng chính hãng</h3>
+        <h3 className="font-medium text-[#333]">Ngọc Mộc</h3>
 
         <p className="mt-1 text-xs text-gray-400">Đang hoạt động</p>
 
@@ -634,8 +634,9 @@ export default function ProductDetailPage() {
 
       <div className="flex flex-wrap gap-2">
        <Link
-        href="https://m.me/ngocmoc.hair"
-        type="button"
+        href="https://www.facebook.com/ngocmoc.hair/"
+        target="_blank"
+        rel="noopener noreferrer"
         className="flex h-9 items-center gap-2 border border-[#EE4D2D] bg-[#FFF5F1] px-4 text-xs text-[#EE4D2D]">
         <FiMessageCircle />
         Chat ngay
