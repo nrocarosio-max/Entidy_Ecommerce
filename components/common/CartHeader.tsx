@@ -191,7 +191,7 @@ export default function CartHeader() {
       )}
      </div>
 
-     <span className="hidden lg:block">Cart</span>
+     <span className="hidden lg:block">Giỏ hàng</span>
     </button>
    </div>
 

@@ -22,11 +22,11 @@ const Header = () => {
  }, [router.asPath]);
 
  const navigationItems = [
-  { name: "Trang chủ", href: "/" },
-  { name: "Chăm sóc da", href: "/categories/skincare" },
-  { name: "Trang điểm", href: "/categories/makeup" },
-  { name: "Chăm sóc cơ thể", href: "/categories/body-care" },
-  { name: "Liên hệ", href: "/contact" },
+  { name: "Trang chủ", href: "/product/xa-phong-thao-duoc-tan-cuong-120g" },
+  { name: "Chăm sóc da", href: "/product/xa-phong-thao-duoc-tan-cuong-120g" },
+  { name: "Trang điểm", href: "/product/xa-phong-thao-duoc-tan-cuong-120g" },
+  { name: "Chăm sóc cơ thể", href: "/product/xa-phong-thao-duoc-tan-cuong-120g" },
+  { name: "Liên hệ", href: "/product/xa-phong-thao-duoc-tan-cuong-120g" },
  ];
 
  return (
@@ -58,7 +58,7 @@ const Header = () => {
      {/* Search */}
      <button onClick={() => setIsSearchOpen(true)} className="flex items-center justify-center gap-1" aria-label="Tìm kiếm">
       <HiSearch size={22} />
-      <span className="hidden lg:block">Search</span>
+      <span className="hidden lg:block">Tìm kiếm</span>
      </button>
 
      {/* Cart */}
@@ -67,7 +67,7 @@ const Header = () => {
      {/* My Account */}
      <Link href="/order/my-orders" className="flex items-center gap-1">
       <FaUser size={18} />
-      <span className="hidden lg:block">Me</span>
+      <span className="hidden lg:block">Tôi</span>
      </Link>
     </div>
    </div>
