@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import axios from "axios";
-
+import Link from "next/link";
 import {
  FiPlay,
  FiShoppingCart,
@@ -633,10 +633,13 @@ export default function ProductDetailPage() {
       </div>
 
       <div className="flex flex-wrap gap-2">
-       <button type="button" onClick={scrollToOrder} className="flex h-9 items-center gap-2 border border-[#EE4D2D] bg-[#FFF5F1] px-4 text-xs text-[#EE4D2D]">
+       <Link
+        href="https://m.me/ngocmoc.hair"
+        type="button"
+        className="flex h-9 items-center gap-2 border border-[#EE4D2D] bg-[#FFF5F1] px-4 text-xs text-[#EE4D2D]">
         <FiMessageCircle />
         Chat ngay
-       </button>
+       </Link>
 
        <button type="button" onClick={scrollToOrder} className="flex h-9 items-center gap-2 border border-gray-200 px-4 text-xs text-gray-600">
         Xem sản phẩm
