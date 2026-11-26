@@ -214,7 +214,7 @@ export const productData: ProductDetail[] = [
 
   // Cập nhật giá bán thực tế
   price: 129000,
-  originalPrice: 189000,
+  originalPrice: 259000,
 
   shortDescription:
    "Xà phòng gội thảo dược GREENSEVEN Cỏ Usma Tân Cương 120g, kết hợp 29 loại thảo mộc tự nhiên. Sản phẩm dạng bánh tiện lợi, hỗ trợ làm sạch tóc và da đầu, chăm sóc tóc và kiểm soát dầu.",
