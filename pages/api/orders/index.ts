@@ -13,7 +13,11 @@ import { Product } from "~/models/Product";
 import { Customer } from "~/models/Customer";
 import { Store } from "~/models/Store";
 const AFFILIATE_COOKIE_NAME = "affiliate_attribution";
-
+const HAIR_SOAP_COMBO_PRICES: Record<number, number> = {
+ 1: 129000,
+ 2: 200000,
+ 3: 260000,
+};
 function getCookieValue(cookieHeader: string | undefined, name: string): string | null {
  if (!cookieHeader) return null;
 
@@ -314,11 +318,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
    const orderItems = items.map((item: any) => {
     const product = productMap.get(item.productId)!;
-
     const quantity = Number(item.quantity);
 
-    // Do not trust price or currency supplied by the client.
-    const price = Number(product.price);
+    // Giá mặc định từ database
+    let subtotal = Number(product.price) * quantity;
+    let price = Number(product.price);
+
+    // Giá combo áp dụng cho xà phòng mọc tóc
+    // TODO: thay điều kiện này bằng slug hoặc productId chính xác của sản phẩm
+    const isHairSoap = product.name.toLowerCase().includes("xà phòng mọc tóc");
+
+    if (isHairSoap) {
+     const comboTotal = HAIR_SOAP_COMBO_PRICES[quantity];
+
+     if (comboTotal === undefined) {
+      throw new Error("Invalid quantity for hair soap combo.");
+     }
+
+     subtotal = comboTotal;
+     price = comboTotal / quantity;
+    }
 
     if (!Number.isFinite(price) || price < 0) {
      throw new Error(`Invalid price for product "${product.name}".`);
@@ -336,9 +355,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
      quantity,
 
+     // Giá trung bình mỗi sản phẩm trong combo
      price,
 
-     subtotal: price * quantity,
+     // Tổng tiền thực tế của combo
+     subtotal,
 
      currency: String(product.currency || currency || "VND").toUpperCase(),
     };
