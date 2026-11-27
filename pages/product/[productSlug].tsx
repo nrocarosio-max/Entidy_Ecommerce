@@ -137,6 +137,7 @@ export default function ProductDetailPage() {
  const [isFavorite, setIsFavorite] = useState(false);
  const [searchQuery, setSearchQuery] = useState("");
  const [showMobileMenu, setShowMobileMenu] = useState(false);
+ const [totalPrice, setTotalPrice] = useState(129000);
  useEffect(() => {
   document.body.style.overflow = showOrderPopup || showSuccessPopup ? "hidden" : "";
 
@@ -164,8 +165,6 @@ export default function ProductDetailPage() {
 
   return Math.round(((product.originalPrice - product.price) / product.originalPrice) * 100);
  }, [product?.originalPrice, product?.price]);
-
- const totalPrice = (product?.price ?? 0) * quantity;
 
  const scrollToOrder = () => {
   setSubmitMessage("");
@@ -1013,33 +1012,38 @@ export default function ProductDetailPage() {
          {/* ORDER SUMMARY */}
 
          <div className="rounded-md bg-[#FFF5F1] p-4">
-          <div className="flex items-center justify-between text-sm">
-           <span className="text-gray-600">Đơn giá</span>
-           <span>{formatPrice(product.price)}</span>
-          </div>
+          <div className="text-sm font-medium text-gray-700 mb-3">Chọn số lượng sản phẩm</div>
 
-          <div className="mt-4 flex items-center justify-between text-sm">
-           <span className="text-gray-600">Số lượng</span>
-
-           <div className="flex h-8 items-center rounded border border-gray-200 bg-white">
+          <div className="space-y-2">
+           {[
+            { quantity: 1, price: 129000, label: "Mua 1 xà phòng mọc tóc", priceText: "129.000đ" },
+            { quantity: 2, price: 200000, label: "Mua 2 xà phòng mọc tóc", priceText: "200.000đ" },
+            { quantity: 3, price: 260000, label: "Mua 3 xà phòng mọc tóc", priceText: "260.000đ" },
+           ].map((option) => (
             <button
+             key={option.quantity}
              type="button"
-             onClick={() => handleQuantity("decrease")}
-             disabled={quantity <= 1}
-             className="flex h-full w-8 items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-30">
-             <FiMinus size={12} />
-            </button>
+             onClick={() => {
+              setQuantity(option.quantity);
+              setTotalPrice(option.price);
+             }}
+             className={`flex w-full items-center justify-between rounded-md border p-3 transition ${
+              quantity === option.quantity ? "border-[#EE4D2D] bg-white ring-1 ring-[#EE4D2D]" : "border-gray-200 bg-white hover:border-[#EE4D2D]"
+             }`}>
+             <div className="flex items-center gap-3">
+              <div
+               className={`flex h-4 w-4 items-center justify-center rounded-full border ${
+                quantity === option.quantity ? "border-[#EE4D2D]" : "border-gray-300"
+               }`}>
+               {quantity === option.quantity && <div className="h-2 w-2 rounded-full bg-[#EE4D2D]" />}
+              </div>
 
-            <span className="min-w-10 text-center text-sm">{quantity}</span>
+              <span className="text-sm text-gray-700">{option.label}</span>
+             </div>
 
-            <button
-             type="button"
-             onClick={() => handleQuantity("increase")}
-             disabled={quantity >= 99}
-             className="flex h-full w-8 items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-30">
-             <FiPlus size={12} />
+             <span className="font-bold text-[#EE4D2D]">{option.priceText}</span>
             </button>
-           </div>
+           ))}
           </div>
 
           <div className="mt-4 flex items-center justify-between border-t border-[#f2d9d0] pt-4">
@@ -1048,7 +1052,7 @@ export default function ProductDetailPage() {
            <span className="text-xl font-bold text-[#EE4D2D]">{formatPrice(totalPrice)}</span>
           </div>
 
-          <p className="mt-2 text-[11px] text-gray-500">Phí vận chuyển sẽ được xác nhận theo địa chỉ nhận hàng.</p>
+          <p className="mt-2 text-[11px] text-gray-500">Phí vận chuyển 0đ. Miễn phí vận chuyển toàn quốc</p>
          </div>
 
          {/* ERROR MESSAGE */}
@@ -1072,7 +1076,7 @@ export default function ProductDetailPage() {
 
          <div className="flex items-center justify-center gap-2 pb-1 text-xs text-gray-400">
           <FiShield className="text-[#EE4D2D]" />
-          Thông tin của bạn được bảo mật.
+          Thanh toán khi nhận hàng. Miễn phí đổi trả nếu không ưng ý trong vòng 7 ngày.
          </div>
         </form>
        </div>
