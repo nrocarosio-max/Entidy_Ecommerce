@@ -320,27 +320,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const product = productMap.get(item.productId)!;
     const quantity = Number(item.quantity);
 
-    // Giá mặc định từ database
-    let subtotal = Number(product.price) * quantity;
-    let price = Number(product.price);
+    const originalPrice = Number(product.price);
 
-    // Giá combo áp dụng cho xà phòng mọc tóc
-    // TODO: thay điều kiện này bằng slug hoặc productId chính xác của sản phẩm
-    const isHairSoap = product.name.toLowerCase().includes("xà phòng mọc tóc");
-
-    if (isHairSoap) {
-     const comboTotal = HAIR_SOAP_COMBO_PRICES[quantity];
-
-     if (comboTotal === undefined) {
-      throw new Error("Invalid quantity for hair soap combo.");
-     }
-
-     subtotal = comboTotal;
-     price = comboTotal / quantity;
+    if (!Number.isFinite(originalPrice) || originalPrice < 0) {
+     throw new Error(`Invalid price for product "${product.name}".`);
     }
 
-    if (!Number.isFinite(price) || price < 0) {
-     throw new Error(`Invalid price for product "${product.name}".`);
+    // Giá combo xà phòng thảo dược Tân Cương
+    const isHairSoap = product.name.toLowerCase().includes("xà phòng thảo dược tân cương");
+
+    let subtotal = originalPrice * quantity;
+    let price = originalPrice;
+
+    if (isHairSoap) {
+     const comboPrices: Record<number, number> = {
+      1: 129000,
+      2: 200000,
+      3: 260000,
+     };
+
+     const comboPrice = comboPrices[quantity];
+
+     if (comboPrice === undefined) {
+      throw new Error("Combo chỉ hỗ trợ mua từ 1 đến 3 sản phẩm.");
+     }
+
+     subtotal = comboPrice;
+     price = comboPrice / quantity;
     }
 
     return {
@@ -354,11 +360,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
      },
 
      quantity,
-
-     // Giá trung bình mỗi sản phẩm trong combo
      price,
-
-     // Tổng tiền thực tế của combo
      subtotal,
 
      currency: String(product.currency || currency || "VND").toUpperCase(),
