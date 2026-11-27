@@ -1018,7 +1018,7 @@ export default function ProductDetailPage() {
            {[
             { quantity: 1, price: 129000, label: "Mua 1 xà phòng mọc tóc", priceText: "129.000đ" },
             { quantity: 2, price: 200000, label: "Mua 2 xà phòng mọc tóc", priceText: "200.000đ" },
-            { quantity: 3, price: 260000, label: "Mua 3 xà phòng mọc tóc", priceText: "260.000đ" },
+            { quantity: 3, price: 260000, label: "Mua 3 + tặng 1 xà phòng mọc tóc", priceText: "260.000đ" },
            ].map((option) => (
             <button
              key={option.quantity}
